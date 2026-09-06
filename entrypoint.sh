@@ -50,7 +50,9 @@ fi
 # （socat 不能听 3080 再让 dsh 也听 3080：0.0.0.0 会占用 127.0.0.1，必然 EADDRINUSE）
 if command -v socat >/dev/null 2>&1; then
   echo "[entrypoint] 启动 socat 转发: 0.0.0.0:3080 -> 127.0.0.1:3081"
-  socat TCP-LISTEN:3080,fork,reuseaddr TCP:127.0.0.1:3081 &
+  # 上游 forever + intervall=1：socat 先于 dsh web 启动，dsh 监听 3081 前
+  # 若有连接打到 3080，socat 会每秒重试直到 dsh 就绪，而不是抛 Connection refused
+  socat TCP-LISTEN:3080,fork,reuseaddr TCP:127.0.0.1:3081,forever,intervall=1 &
 fi
 
 echo "[entrypoint] 启动 dsh web (内部 127.0.0.1:3081)"
