@@ -1,6 +1,8 @@
 # 密钥与本地数据不入库
 .env
 .env.local
+wb-auth.json
+*.auth.json
 
 # 部署产生的本地数据目录
 dsh/
@@ -13,3 +15,11 @@ workspace/
 
 # Node
 node_modules/
+
+# 排查脚本与临时下载的源码包（不入库）
+probe.mjs
+probe-run.sh
+extract.mjs
+.tmp-dshsrc/
+.tmp-dshremote/
+.workbuddy/

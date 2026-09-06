@@ -64,7 +64,8 @@ WORKDIR /workspace
 EXPOSE 3080
 
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
-RUN chmod +x /usr/local/bin/dsh-entrypoint
+RUN chmod +x /usr/local/bin/dsh-entrypoint \
+    && sed -i 's/\r$//' /usr/local/bin/dsh-entrypoint   # 兼容 Windows 开发的 CRLF 换行
 
 ENTRYPOINT ["dsh-entrypoint"]
 

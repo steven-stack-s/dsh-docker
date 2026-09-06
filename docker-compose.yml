@@ -21,6 +21,14 @@
 services:
   dsh:
     image: ${DSH_IMAGE:-ghcr.io/steven-stack-s/dsh-docker:latest}
+    # 本地 build：docker compose up -d --build
+    # 构建时锁 dsh 版本（默认 latest，可通过 build-arg 覆盖）
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DSH_VERSION: ${DSH_VERSION:-0.1.2-rc.1}
+        PNPM_VERSION: ${PNPM_VERSION:-latest}
     container_name: ${DSH_CONTAINER_NAME:-dsh}
     restart: unless-stopped
 
