@@ -44,10 +44,26 @@ rescue_snapshot() {
       cp -a "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules"
     fi
   fi
-  { echo '{'; echo "  \"created\": \"$(date -Iseconds)\","; echo "  \"dsh\": \"$(dsh --version 2>/dev/null || echo unknown)\""; echo '}'; } > "$RESCUE_DIR/$snap/meta.json"
-  rescue_log "snapshot created $snap"
+  # 变更上下文：meta 记 reason（变更前基线归因的证据）。由触发方经 env REASON_SNAPSHOT 传入；
+  # 走 rescue 封装(plugin)/entrypoint 自愈时带 trigger；缺省 manual。
+  reason="${REASON_SNAPSHOT:-manual}"
+  meta="{\"created\":\"$(date -Iseconds)\",\"reason\":\"$reason\",\"dsh\":\"$(dsh --version 2>/dev/null || echo unknown)\"}"
+  rescue_json_write "$RESCUE_DIR/$snap/meta.json" "$meta"
+  rescue_log "snapshot created $snap (reason: $reason)"
   rescue_prune
   printf '%s' "$snap"
+}
+
+# ---- 变更上下文 / meta 查询 ----
+rescue_meta_read() {
+  # $1 = snap 名（如 snap-0001）或快照目录；打印其 meta.json，缺省打印空
+  s="$1"
+  case "$s" in
+    snap-*) mf="$RESCUE_DIR/$s/meta.json" ;;
+    *)      mf="$1/meta.json" ;;
+  esac
+  [ -f "$mf" ] || return 1
+  cat "$mf"
 }
 
 rescue_prune() {
@@ -103,3 +119,52 @@ rescue_init_lifeboat() {
     rescue_log 'lifeboat profile initialized'
   fi
 }
+
+# ============================================================
+# 状态 / 证据 / incident 基础（rescue-diagnose）
+# ============================================================
+incident_dir(){ printf '%s/incidents' "$RESCUE_DIR"; }
+evidence_dir(){ printf '%s/evidence' "$RESCUE_DIR"; }
+state_dir(){ printf '%s/state' "$RESCUE_DIR"; }
+
+# 原子 JSON 写盘：写 <f>.tmp.$$ 后 mv 覆盖
+rescue_json_write() {
+  f="$1"; json="$2"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$json" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+}
+rescue_json_read() {
+  f="$1"; [ -f "$f" ] || return 1; cat "$f"
+}
+
+# incident id：时间戳+随机后缀，追加不覆盖
+incident_id() {
+  ts=$(date +%Y%m%dT%H%M%S)
+  rnd=$(head -c4 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  [ -n "$rnd" ] || rnd=$$
+  printf 'inc-%s-%s' "$ts" "$rnd"
+}
+rescue_incident_write() {
+  body="$1"; mkdir -p "$(incident_dir)"
+  id=$(incident_id)
+  while [ -f "$(incident_dir)/$id.json" ]; do id=$(incident_id); done
+  rescue_json_write "$(incident_dir)/$id.json" "$body"
+  rescue_log "incident written $id"
+  rescue_incident_prune
+  printf '%s' "$id"
+}
+rescue_incident_list() { ls -1t "$(incident_dir)"/inc-*.json 2>/dev/null; }
+rescue_incident_prune() {
+  n=$(rescue_incident_list | wc -l | tr -d ' ')
+  keep="${RESCUE_INCIDENT_KEEP:-20}"
+  while [ "$n" -gt "$keep" ]; do
+    oldest=$(rescue_incident_list | tail -n1); [ -n "$oldest" ] || break
+    rm -f "$oldest"; n=$((n-1))
+  done
+}
+
+rescue_state_write_lastrun() { rescue_json_write "$(state_dir)/last-run.json" "$1"; }
+rescue_state_read_lastrun() { rescue_json_read "$(state_dir)/last-run.json"; }
+rescue_state_write_selfheal() { rescue_json_write "$(state_dir)/selfheal.json" "$1"; }
+rescue_state_read_selfheal() { rescue_json_read "$(state_dir)/selfheal.json"; }
+
