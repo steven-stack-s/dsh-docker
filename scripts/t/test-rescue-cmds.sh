@@ -40,4 +40,21 @@ out3=$(sh "$RESCUE" status)
 echo "$out3" | grep -q "RESCUE_DIR=$DSH_HOME/.rescue" || fail status-rescue-dir
 echo "$out3" | grep -q 'snap-0001' || fail status-snap-list
 
+
+# --- snapshot --reason: meta 记 reason（变更上下文）---
+sh "$RESCUE" snapshot --reason 'plugin add @scope/demo' >/dev/null
+grep -q '"reason":"plugin add @scope/demo"' "$DSH_HOME/.rescue/snap-0002/meta.json" || fail snapshot-reason
+[ -f "$DSH_HOME/.rescue/snap-0002/meta.json" ] || fail snapshot-reason-file
+
+# --- incident list: 列出 incidents 目录里的文件 ---
+mkdir -p "$DSH_HOME/.rescue/incidents"
+printf '%s' '{"id":"inc-TEST","phase":"boot"}' > "$DSH_HOME/.rescue/incidents/inc-TEST.json"
+il=$(sh "$RESCUE" incident list)
+echo "$il" | grep -q 'inc-TEST' || fail incident-list
+
+# --- report: 输出含标题与 incident ---
+rep=$(sh "$RESCUE" report)
+echo "$rep" | grep -q 'DSH rescue report' || fail report-title
+echo "$rep" | grep -q 'inc-TEST' || fail report-incident
+
 echo 'ALL-PASS'
