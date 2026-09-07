@@ -38,23 +38,19 @@ function extractPluginName(text) {
 function parseArgs(argv) {
   const a = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--phase') a.phase = argv[++i];
-    else if (argv[i] === '--evidence') a.evidence = argv[++i];
-    else if (argv[i] === '--rescue-dir') a.rescueDir = argv[++i];
-    else if (argv[i] === '--log') a.log = argv[++i];
-    else if (argv[i] === '--json-in') a.jsonIn = argv[++i];
-    else if (argv[i] === '--id') a.id = argv[++i];
-    else if (argv[i] === '--trigger') a.trigger = argv[++i];
-    else if (argv[i] === '--evidence-ref') a.evidenceRef = argv[++i];
-    else if (argv[i] === '--journal') a.journal = argv[++i];
-    else if (argv[i] === '--resolve') a.resolve = argv[++i];
-    else if (argv[i] === '--write-incident') a.writeIncident = 1;
-    else if (argv[i] === '--id') a.id = argv[++i];
-    else if (argv[i] === '--trigger') a.trigger = argv[++i];
-    else if (argv[i] === '--evidence-ref') a.evidenceRef = argv[++i];
-    else if (argv[i] === '--journal') a.journal = argv[++i];
-    else if (argv[i] === '--resolve') a.resolve = argv[++i];
-    else if (argv[i] === '--write-incident') a.writeIncident = 1; // 测试注入
+    const v = argv[i];
+    if (v === '--phase') a.phase = argv[++i];
+    else if (v === '--evidence') a.evidence = argv[++i];
+    else if (v === '--rescue-dir') a.rescueDir = argv[++i];
+    else if (v === '--log') a.log = argv[++i];
+    else if (v === '--json-in') a.jsonIn = argv[++i];
+    else if (v === '--id') a.id = argv[++i];
+    else if (v === '--trigger') a.trigger = argv[++i];
+    else if (v === '--evidence-ref') a.evidenceRef = argv[++i];
+    else if (v === '--journal') a.journal = argv[++i];
+    else if (v === '--resolve') a.resolve = argv[++i];
+    else if (v === '--write-incident') a.writeIncident = 1;
+    else if (v === '--diag-file') a.diagFile = argv[++i];
   }
   return a;
 }
@@ -103,7 +99,8 @@ function diagnose(opts) {
   const evidDir = opts.evidence;
   const out = readFileOr(path.join(evidDir, 'dsh.stdout.log'));
   const err = readFileOr(path.join(evidDir, 'dsh.stderr.log'));
-  const text = (out + '\n' + err);
+  const merged = readFileOr(path.join(evidDir, 'dsh.log'));
+  const text = (out + '\n' + err + '\n' + merged);
   const ctx = buildChangeContext(opts.rescueDir);
   const offender = extractPluginName(text);
   const nonPlugin = NON_PLUGIN_PATTERNS.find((p) => p.re.test(text));
@@ -196,7 +193,12 @@ if (require.main === module) {
   }
   if (!evidDir && !args.writeIncident) { console.error('usage: node diagnose.js --phase boot|runtime --evidence <dir> [--rescue-dir <dir>] [--write-incident 1] [--journal <f>] [--trigger <t>] [--evidence-ref <r>] [--resolve <outcome>]'); process.exit(2); }
   if (!rescueDir && process.env.DSH_HOME) rescueDir = path.join(process.env.DSH_HOME, '.rescue');
-  const r = diagnose({ phase: args.phase, evidence: evidDir, rescueDir });
+  let r;
+  if (args.diagFile) {
+    try { r = JSON.parse(fs.readFileSync(args.diagFile, 'utf8')); } catch (e) { console.error('diag-file unreadable'); process.exit(2); }
+  } else {
+    r = diagnose({ phase: args.phase, evidence: evidDir, rescueDir });
+  }
   if (args.writeIncident) {
     const sh0 = { recommended: r.recommendedHeal, target: r.recommendedTarget || null, actions: readJournal(args.journal), outcome: args.resolve || resolveOutcome({ actions: readJournal(args.journal) }) };
     const inc = makeIncident(r, { id: args.id, trigger: args.trigger, evidenceRef: args.evidenceRef, journal: args.journal, resolve: args.resolve });
