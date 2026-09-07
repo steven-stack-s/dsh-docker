@@ -53,6 +53,12 @@ services:
       - RESCUE_START_TIMEOUT=${RESCUE_START_TIMEOUT:-120}
       - RESCUE_KEEP=${RESCUE_KEEP:-3}
       - RESCUE_PROFILE=${RESCUE_PROFILE:-web}
+      # 自动排查·根因归因·智能自愈（红线：仅动插件树四件套，绝不动 cordis.patch.yml/会话/记忆/配置/凭据）
+      - RESCUE_SELFHEAL=${RESCUE_SELFHEAL:-on}
+      - RESCUE_REMOVE_LIMIT=${RESCUE_REMOVE_LIMIT:-2}
+      - RESCUE_ROLLBACK_LIMIT=${RESCUE_ROLLBACK_LIMIT:-2}
+      - RESCUE_DIAGNOSE_EVIDENCE=${RESCUE_DIAGNOSE_EVIDENCE:-on}
+      - RESCUE_INCIDENT_KEEP=${RESCUE_INCIDENT_KEEP:-20}
 
     volumes:
       # DSH 程序本体（npm 全局包 + dsh/pnpm 命令）——升级与插件管理写入这里
