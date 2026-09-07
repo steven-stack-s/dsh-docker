@@ -106,12 +106,12 @@ probe=/opt/dsh-rescue/probe-ready.js
 # 时无法监督 -> 降级为原始前台 exec，保证慢启动的健康 dsh 不被误杀。
 if [ ! -f "$probe" ]; then
   echo '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
-  exec dsh web --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
+  exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
 fi
 while :; do
   attempt=$((attempt + 1))
   echo "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
-  dsh web --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
+  dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
   child=$!
   probe=/opt/dsh-rescue/probe-ready.js
   if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
