@@ -58,28 +58,27 @@ Expected output:
 [entrypoint] DSH 已就绪: /opt/dsh/bin/dsh
 [entrypoint] 启动 socat 转发: 0.0.0.0:3080 -> 127.0.0.1:3081
 [entrypoint] 启动 dsh web (内部 127.0.0.1:3081)
-dsh web: http://127.0.0.1:3081
+dsh web: http://127.0.0.1:3081/?token=xxxxxxxx   # ← the launch token, printed on the "dsh web:" line
 ```
 
 - "opening the default browser" should not appear (`--no-open` is set)
 - The `Connection refused` from socat right at startup is normal (dsh is not ready yet) and disappears once dsh is up
+- Copy the `?token=...` value from the `dsh web:` line — you need it for the first visit (see §4)
 
-## 4. Create the First Admin
+## 4. Access with the Launch Token
 
-DSH's Web UI lets you create the first admin, but this operation is **loopback-only** (to prevent remote registration hijacking). Run it on the **host** (after port mapping, `127.0.0.1:3080` is the container's entry point):
+DSH core does **not** require an admin account to use. On first boot it issues a **launch token** — printed in the container log (see §3.3) — that unlocks the first visit. The token changes on every restart.
 
-```bash
-curl -s -X POST http://127.0.0.1:3080/auth/bootstrap \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"你的用户名","password":"你的密码"}'
-# expected: {"ok":true,...,"user":{...}}
-```
+- **First visit**: open `http://<host-ip>:3080/?token=<token-from-log>`
+- **Later visits** (same running instance): the token is no longer needed — open `http://<host-ip>:3080` directly
 
-Hosts without curl can use an SSH tunnel instead (see [02](02-authentication-remote-access.md)).
+> If you access from a LAN IP or a domain that is not on dsh's automatic allow-list, add it to `DSH_TRUSTED_HOSTS` in `.env` before starting — otherwise the page opens but every `/api` call returns 403 (see the `.env` comment; dsh 0.1.2 only trusts loopback or allow-listed Hosts).
+>
+> Want username/password + MFA for **remote** access? That is the optional [dsh-remote](https://github.com/xgone/dsh-remote) plugin — see [02](02-authentication-remote-access.md). dsh itself needs no account.
 
 ## 5. Verification
 
-- Open `http://<主机IP>:3080` in a browser and log in with the account you just created
+- Open `http://<主机IP>:3080` in a browser — first time use `http://<主机IP>:3080/?token=<from-log>`, then open a normal session; you can now chat with the model
 - Go to Settings → Models and confirm the API Key is in effect
 - In `docker ps`, the `dsh` container status is healthy (first boot copies from the seed, ready in seconds, so the starting phase is very brief)
 

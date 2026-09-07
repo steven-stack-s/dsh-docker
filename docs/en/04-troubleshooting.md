@@ -6,7 +6,7 @@
 |---|---|---|
 | Container restarts repeatedly, logs `listen EADDRINUSE 127.0.0.1:3080` | The old entrypoint makes socat and dsh fight over the same port | Make sure you use this repo's entrypoint (socat listens on 3080, dsh on 3081) and rebuild the container |
 | Errors at startup like `plugin tree failed to load` / `node:zlib` | The base image's Node version is too old | Use this repo's Dockerfile (`node:24-slim`; DSH requires Node ≥ 22.18) |
-| The page opens but `/api/...` returns 403 | Not authenticated (dsh-remote scenario) | Make sure you are logged in; the first admin must be created via loopback (see [02](02-authentication-remote-access.md)) |
+| The page opens but `/api/...` returns 403 | Not authenticated (dsh-remote) or the Host is not allow-listed (no dsh-remote) | With dsh-remote: log in, or create the first admin (see [02](02-authentication-remote-access.md)). Without dsh-remote: set `DSH_TRUSTED_HOSTS` in `.env` (see [01](01-quick-start.md)) |
 | Settings page shows `settings are unavailable in this browser` | DSH design: settings are loopback-only | Not a blocker; change settings with curl from the host via `/api/settings.mutate` (see below) |
 | `crypto.randomUUID is not a function` | Accessing from a non-HTTPS / non-localhost origin (browser secure context) | Use `localhost`, an SSH tunnel, or a reverse proxy with HTTPS (see [02](02-authentication-remote-access.md)) |
 | Copying from the seed on first boot is slow | Windows + WSL bind mount crosses filesystems | Seconds on Linux; on Windows, use a docker named volume or wait for the first copy |

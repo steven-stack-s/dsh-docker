@@ -25,7 +25,7 @@ cp .env.example .env            # edit .env, fill in DEEPSEEK_API_KEY
 # 2. Start (on first boot, DSH is copied from the in-image seed; ready in seconds)
 docker compose up -d
 
-# 3. Access — open http://<host-ip>:3080/?token=xxxxxxxx and create the first admin account
+# 3. Access — docker logs dsh prints a one-time token; first visit http://<host-ip>:3080/?token=<token> (later visits need no token)
 ```
 
 Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
@@ -36,7 +36,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 
 | Doc | Content |
 |---|---|
-| [docs/en/01-quick-start.md](docs/en/01-quick-start.md) | Install, configure, first admin, verify |
+| [docs/en/01-quick-start.md](docs/en/01-quick-start.md) | Install, configure, token access, verify |
 | [docs/en/02-authentication-remote-access.md](docs/en/02-authentication-remote-access.md) | Optional auth, SSH tunnel, reverse proxy |
 | [docs/en/03-upgrade-maintenance.md](docs/en/03-upgrade-maintenance.md) | Upgrade, plugins, keys, backup |
 | [docs/en/04-troubleshooting.md](docs/en/04-troubleshooting.md) | Troubleshooting |

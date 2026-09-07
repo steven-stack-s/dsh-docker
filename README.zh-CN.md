@@ -26,7 +26,7 @@ cp .env.example .env            # 编辑 .env，填入 DEEPSEEK_API_KEY
 # 2. 启动（首次启动从镜像内 seed 复制 DSH，秒级就绪）
 docker compose up -d
 
-# 3. 访问 —— 浏览器打开 http://<主机IP>:3080，创建首个管理员后即可使用
+# 3. 访问 —— docker logs dsh 会打印一次性 token；首次访问 http://<主机IP>:3080/?token=<token>（之后无需再带）
 ```
 
 详细步骤见 [docs/zh-CN/01-快速开始.md](docs/zh-CN/01-快速开始.md)。
@@ -37,7 +37,7 @@ docker compose up -d
 
 | 文档 | 内容 |
 |---|---|
-| [docs/zh-CN/01-快速开始.md](docs/zh-CN/01-快速开始.md) | 安装、配置、首次管理员、验证 |
+| [docs/zh-CN/01-快速开始.md](docs/zh-CN/01-快速开始.md) | 安装、配置、token 访问、验证 |
 | [docs/zh-CN/02-认证与远程访问.md](docs/zh-CN/02-认证与远程访问.md) | 可选 dsh-remote 认证、SSH 隧道、反向代理 |
 | [docs/zh-CN/03-升级与维护.md](docs/zh-CN/03-升级与维护.md) | 升级、插件、密钥、备份 |
 | [docs/zh-CN/04-故障排查.md](docs/zh-CN/04-故障排查.md) | 常见问题 |
