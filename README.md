@@ -41,6 +41,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 | [docs/en/03-upgrade-maintenance.md](docs/en/03-upgrade-maintenance.md) | Upgrade, plugins, keys, backup |
 | [docs/en/04-troubleshooting.md](docs/en/04-troubleshooting.md) | Troubleshooting |
 | [docs/en/05-platform-differences.md](docs/en/05-platform-differences.md) | Linux / NAS / Docker Desktop differences |
+| [docs/en/06-rescue-mode.md](docs/en/06-rescue-mode.md) | Plugin rescue mode: auto-rollback + lifeboat |
 
 ---
 
