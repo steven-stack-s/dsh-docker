@@ -42,7 +42,7 @@ docker compose up -d
 | [docs/zh-CN/03-升级与维护.md](docs/zh-CN/03-升级与维护.md) | 升级、插件、密钥、备份 |
 | [docs/zh-CN/04-故障排查.md](docs/zh-CN/04-故障排查.md) | 常见问题 |
 | [docs/zh-CN/05-平台差异.md](docs/zh-CN/05-平台差异.md) | Linux / NAS / Docker Desktop 差异 |
-| [docs/zh-CN/06-救援模式.md](docs/zh-CN/06-救援模式.md) | 插件救援模式：自动回退 + 救生舱 |
+| [docs/zh-CN/06-救援模式.md](docs/zh-CN/06-救援模式.md) | 插件救援：自动回退 + **自动排查 / 根因归因 / 智能自愈** + 救生舱，含 `rescue report` 事故审阅 |
 
 ---
 

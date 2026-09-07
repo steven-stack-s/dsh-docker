@@ -40,6 +40,11 @@ Relevant environment variables (`.env`; inside the container, inspect with `dock
 | RESCUE_START_TIMEOUT | 120 | readiness-probe timeout in seconds |
 | RESCUE_KEEP | 3 | how many recent snapshots to keep |
 | RESCUE_PROFILE | web | target profile for rollback / plugin ops |
+| RESCUE_SELFHEAL | on | on=auto remove-plugin / rollback on boot failure; off=diagnose + incident + report only |
+| RESCUE_REMOVE_LIMIT | 2 | max auto plugin-removals per container lifetime (over -> report-only) |
+| RESCUE_ROLLBACK_LIMIT | 2 | max auto snapshot-rollbacks per container lifetime |
+| RESCUE_DIAGNOSE_EVIDENCE | on | tee each dsh boot output to `$DSH_HOME/.rescue/evidence/` for attribution |
+| RESCUE_INCIDENT_KEEP | 20 | how many incidents to keep under `$DSH_HOME/.rescue/incidents/` |
 
 ## 3. Command Cheat Sheet
 
@@ -56,6 +61,11 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 | `docker exec dsh rescue dsh-upgrade <version>` | Record the current DSH version as last-good, then upgrade the program to the given version |
 | `docker exec dsh rescue dsh-reinstall` | Reinstall the program at the recorded last-good version (lightweight fallback for program incidents) |
 | `docker exec dsh rescue lifeboat` | Print instructions to switch to lifeboat (equivalent to RESCUE=1) |
+| `docker exec dsh rescue report` | Incident overview table: phase / root-cause category / offending plugin / self-heal outcome (see §4b) |
+| `docker exec dsh rescue report <id>` | Expand one incident: rationale / self-heal actions / evidenceRef / redline assertion |
+| `docker exec dsh rescue report --json` | Emit incidents as valid JSON (for scripting) |
+| `docker exec dsh rescue incident list` | List recorded incident ids |
+| `docker exec dsh rescue snapshot --reason '<text>'` | Manual snapshot with trigger context (e.g. `--reason 'plugin add @scope/x'`) for later attribution |
 
 > After installing/removing/rolling back plugins, run `docker restart dsh` so the entrypoint boots with the new plugin tree; if boot fails, the entrypoint auto-rolls back (see §4).
 
@@ -90,6 +100,32 @@ tail -20 /data/dsh/.rescue/log/rescue.log      # inside the container
 ```
 
 `rescue status` shows the same file's tail as its “last event log”.
+
+## 4b. Auto-diagnose · Root-cause attribution · Smart self-heal (rescue-diagnose)
+
+On top of auto-rollback, the entrypoint provides an **evidence-driven diagnosis + self-heal loop**: each boot's dsh output is teed into an evidence dir, a **deterministic** (non-LLM) rule engine attributes the root cause, the decision matrix acts accordingly, and every incident is written as an auditable record surfaced by `rescue report`. **Hard rule:** self-heal only touches the four plugin-tree files (package.json / pnpm-lock.yaml / pnpm-workspace.yaml / node_modules) and `$DSH_HOME/.rescue` state/incidents — it **never** auto-modifies `cordis.patch.yml`, sessions / memory / config / credentials.
+
+**Trigger paths**
+
+1. **Boot failure** (probe timeout / early child exit): capture this round's evidence → run diagnose attribution (evidence + audit + snapshot meta trigger/reason) → act on `recommendedHeal`: `remove-plugin` (snapshot the scene first, then remove via `dsh plugin remove`, tree-only) / `rollback` (restore the pre-change baseline snapshot) / `report-only` (no auto change; write incident) → write incident, then retry or exit.
+2. **Runtime crash**: after a healthy boot dsh exits abnormally → write last-run (abnormalExit) and exit (docker restart hand-off, no infinite respawn in PID1); on the next start the abnormal exit is noted and a runtime incident recorded for `rescue report`. **Conservative default: runtime crashes are reported/attributed only, never auto-removed/rolled back** (avoids collateral damage); dispose manually per the report.
+
+**Self-heal guardrails** (anti-infinite / anti-collateral):
+
+- Budget in `state/selfheal.json`: per container lifetime auto plugin-removals ≤ `RESCUE_REMOVE_LIMIT` and snapshot-rollbacks ≤ `RESCUE_ROLLBACK_LIMIT`; over the limit → report-only.
+- Conservative attribution (report rather than wrong-remove): `remove-plugin` only when evidence matches a plugin failure and the offender is the most-recent add; otherwise prefer rollback or report-only.
+- A scene snapshot is taken before every self-heal action; all actions go to `rescue.log` and update the matching incident.
+- With `RESCUE_SELFHEAL=off`, only diagnose + write incident + hint — never auto-change.
+
+**Where evidence & incidents live** (inside the data volume `$DSH_HOME/.rescue/`):
+
+- `evidence/boot-<seq>-<ts>/`: each boot's dsh output (dsh.log) + temp fifo.
+- `incidents/inc-<ts>-<rand>.json`: attribution + self-heal actions + redline assertion for one incident; keep `RESCUE_INCIDENT_KEEP` (default 20).
+- `state/last-run.json`, `state/selfheal.json`: last run state / self-heal budget.
+
+Review one incident: `docker exec dsh rescue report <id>`; the output includes `rootCause.rationale` (why it judged so) and `redline.cordisPatchTouched=false` (asserts cordis.patch.yml was not touched this round).
+
+> Calibration note: the log patterns used for attribution are the top-of-file data constants `PLUGIN_FAIL_PATTERNS` in `/opt/dsh-rescue/diagnose.js`. If a real failure is missed and misjudged as report-only, review the evidence via `docker exec dsh rescue report <id>` on the host and tune the patterns once.
 
 ## 5. Lifeboat
 

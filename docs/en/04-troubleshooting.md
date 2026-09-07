@@ -34,7 +34,24 @@ curl -s -b /tmp/dsh-cookies.txt -X POST http://127.0.0.1:3080/api/settings.mutat
   -d '{"type":"client-request","rpcId":"r2","method":"settings.mutate","payload":{"ns":"llm-deepseek","ops":[{"op":"set","path":["baseURL"],"value":"https://api.deepseek.com"}]}}'
 ```
 
+## Startup / runtime crash: check auto-attribution and incident report first
+
+If dsh web fails to start or crashes at runtime, the container automatically **attributes and records an incident** under `$DSH_HOME/.rescue/`. Run:
+
+```bash
+docker logs dsh --tail 100 | grep -iE 'diagnose|heal|incident|rollback|lifeboat'   # entrypoint attribution / self-heal trail
+docker exec dsh rescue report                                                 # incident overview (phase/root-cause/offender/outcome)
+docker exec dsh rescue report <id>                                            # expand one: rationale + self-heal actions + redline assertion
+docker exec dsh rescue incident list
+tail -30 /data/dsh/.rescue/log/rescue.log                                     # audit log (in the volume, browsable offline)
+```
+
+> Red line: auto-diagnosis only reads evidence and only touches the four plugin-tree files plus `.rescue` state. If a report ever shows `redline.cordisPatchTouched=true` (should not happen) or recovery is still impossible, enter the lifeboat with `RESCUE=1` and fix manually (see 06 · Rescue Mode).
+
+**Reading the outcome:** `report-only` = auto-attribution found no plugin cause / no baseline, no auto change — needs a human; `recovered-remove` / `recovered-rollback` = recovered by auto-removing a plugin or rolling back a snapshot. If `rootCause.category=unknown` and it keeps returning report-only, it is usually a non-plugin issue (program / upgrade / resources) — see 03-upgrade-maintenance for the `dsh-reinstall` fallback.
+
 ## Collect diagnostics
+
 
 When reporting a problem, please attach:
 
