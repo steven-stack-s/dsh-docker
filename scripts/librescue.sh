@@ -9,6 +9,10 @@ RESCUE_KEEP="${RESCUE_KEEP:-3}"
 LOG_DIR="$RESCUE_DIR/log"
 LOG_FILE="$LOG_DIR/rescue.log"
 
+# HERE: 继承 source 方(如 rescue 已置为仓库根或 /opt/dsh-rescue)；否则尽力自定位。仅本地开发兜底用，镜像内 LIFEBOAT_TMPL 由 Dockerfile 恒置。
+HERE="${HERE:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+LIFEBOAT_TMPL="${LIFEBOAT_TMPL:-$HERE/profiles/lifeboat.tmpl}"
+
 rescue_log() {
   mkdir -p "$LOG_DIR"
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG_FILE"
@@ -89,4 +93,13 @@ rescue_restore() {
     if [ -f "$src/$f" ]; then cp "$src/$f" "$pdir/$f"; else rm -f "$pdir/$f"; fi
   done
   rescue_log "restore done $snap"
+}
+
+rescue_init_lifeboat() {
+  mkdir -p "$DSH_HOME/profiles/lifeboat"
+  if [ ! -f "$DSH_HOME/profiles/lifeboat/package.json" ]; then
+    cp "$LIFEBOAT_TMPL/package.json" "$DSH_HOME/profiles/lifeboat/package.json" 2>/dev/null || true
+    cp "$LIFEBOAT_TMPL/cordis.patch.yml" "$DSH_HOME/profiles/lifeboat/cordis.patch.yml" 2>/dev/null || true
+    rescue_log 'lifeboat profile initialized'
+  fi
 }
