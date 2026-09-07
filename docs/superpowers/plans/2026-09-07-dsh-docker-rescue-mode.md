@@ -10,7 +10,9 @@
 
 **技术栈：** POSIX sh（容器 /bin/sh 为 dash，禁 bash 专有语法）；cp -al 硬链；node 探测脚本做健康检查；docker compose；DSH profile 机制。
 
-**规格：** docs/zh-CN/06-救援模式-设计规范.md（提交 b5f83fd、09b0652、8074903）。执行者先通读该规范。
+**规格：** docs/zh-CN/06-救援模式-设计规范.md。执行者先通读该规范。
+
+> ⚠️ **2026-09-07 已按远端 seed 架构重新对齐本计划。** 本仓库 main 已重置到远端最新 120237b（构建时预装 dsh/pnpm 到镜像 /opt/dsh-seed，首启从 seed 复制到卷 /opt/dsh，完成后 rm -rf seed；日常升级 = docker exec npm install 覆盖 /opt/dsh；新增 DSH_TRUSTED_HOSTS 白名单）。原先基于旧「联网 npm 安装」entrypoint 写的任务 3/5/6 已相应修订：救生舱与正常启动都要带 $TRUSTED_ARGS；主程序兜底语义改为「重开含 seed 的新容器或按 last-good 版本重装」；rescue 工具放镜像独立路径 /opt/dsh-rescue/（不受 /opt/dsh 卷遮蔽，也不随 seed 清理丢失）。
 
 ## 全局约束
 
@@ -270,12 +272,15 @@ case "$cmd" in
     echo 'upgraded; restart container: docker restart dsh'
     ;;
   dsh-reinstall)
+    # 主程序 seed 已在首启 rm -rf，无法容器内重放镜像 seed；
+    # 可靠恢复 = 按 last-good 版本容器内重装（覆盖 /opt/dsh）。
+    # 若连 npm 源都不可达，则只能重建含 seed 的镜像容器（任务 6 文档说明）。
     vf="$RESCUE_DIR/dsh-version-last-good.txt"
     [ -f "$vf" ] || { echo "no recorded version: $vf"; exit 1; }
     v=$(cat "$vf")
     rescue_log "dsh-reinstall to $v"
     if [ -n "${NPM_REGISTRY:-}" ]; then npm install -g "@deepseek-ai/dsh@$v" --registry="$NPM_REGISTRY"; else npm install -g "@deepseek-ai/dsh@$v"; fi
-    echo 'reinstalled; restart container'
+    echo 'reinstalled; restart container: docker restart dsh'
     ;;
   lifeboat)
     echo 'set RESCUE=1 in .env then: docker compose up -d  (boots clean lifeboat)'
@@ -283,6 +288,11 @@ case "$cmd" in
   *) echo "unknown subcommand: $cmd"; exit 2 ;;
 esac
 ```
+
+> **seed 架构说明（2026-09-07）**：主程序 dsh 现在是「构建时锁进 /opt/dsh-seed -> 首启复制到卷 /opt/dsh -> rm -rf seed」。因此：
+> 1. dsh-upgrade（容器内 npm 升级覆盖 /opt/dsh）**仍有效**，与官方每日升级方式一致。
+> 2. dsh-reinstall 只能按 last-good 版本在容器内 npm 重装；**若想回到镜像自带 seed 版本**，需重建镜像容器（`docker compose up -d --build` 或 pull 固定 tag），因为 seed 已清理、卷 /opt/dsh 是持久化挂载不会被镜像覆盖。
+> 3. dsh-version-last-good.txt 由 rescue dsh-upgrade 每次记录，rescue snapshot 的 meta.json 也记 dsh 版本，用于诊断回退时主程序是否被误改。
 
 - [ ] **步骤 2：静态校验** `sh -n rescue`；`chmod +x rescue`。
 - [ ] **步骤 3：写测试 scripts/t/test-rescue-cmds.sh**（复用任务 1 思路）：构造临时 home，`RESCUE` 入口以 `sh rescue` 调用，断言 `snapshot` 建出 snap-0001、篡改后 `rollback` 还原、`status` 输出含 RESCUE_DIR。
@@ -338,16 +348,29 @@ rescue_init_lifeboat() {
 ## 任务 5：entrypoint 监督式启动 + 自动回滚 + 救生舱
 
 **文件**：修改 entrypoint.sh（关键、风险最高）。
-**接口**：保留原行为（首次装 dsh/pnpm -> socat 转发），把末尾 `exec dsh web --port 3081 --no-open` 换成监督循环。env：RESCUE=1（救生舱）、RESCUE_AUTO（默认 on）、RESCUE_START_TIMEOUT（默认 120）、RESCUE_KEEP、RESCUE_PROFILE（默认 web）。
+**接口**：保留现有全部行为（seed 复制/兜底装 dsh、pnpm、socat 转发、$TRUSTED_ARGS 白名单），只把最末行 `exec dsh web --port 3081 --no-open $TRUSTED_ARGS` 替换为「加载 rescue 库 -> 救生舱分支 -> 监督循环」。env：RESCUE=1（救生舱）、RESCUE_AUTO（默认 on）、RESCUE_START_TIMEOUT（默认 120）、RESCUE_KEEP、RESCUE_PROFILE（默认 web）。
 
-- [ ] **步骤 1：改写 entrypoint.sh**（保留原行 12-38 安装/socat 段，替换末两行）
+> ⚠️ **seed 架构集成要点（2026-09-07）**：
+> 1. **$TRUSTED_ARGS 必须带进两种 boot**（正常 web 与救生舱 lifeboat），否则 rescue 或 lifeboat 下 /api 403。故把 58-69 行算出的 TRUSTED_ARGS 作为监督循环与 boot_lifeboat 的公共参数。
+> 2. rescue 工具在镜像 /opt/dsh-rescue/（与 /opt/dsh-seed 同属镜像层，不受卷遮蔽；seed 复制是拷到 /opt/dsh 卷，/opt/dsh-rescue 不在此卷内）。entrypoint 里 source /opt/dsh-rescue/librescue.sh，不依赖 /opt/dsh 是否就绪。
+> 3. 监督循环只在「能对 live 插件树做硬链快照」即 $DSH_HOME/.rescue 就绪时启用自动回退；rescue 库缺失则降级为原 exec（见下方 no-op 降级）。
+
+- [ ] **步骤 1：改写 entrypoint.sh**：把最末 `exec dsh web --port 3081 --no-open $TRUSTED_ARGS` 整行替换为下面整段（其余行 1-69 全部保留不动）
 
 ```sh
-# ===== 救援模式：加载共享库（镜像内路径优先） =====
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ -f "$HERE/scripts/librescue.sh" ]; then . "$HERE/scripts/librescue.sh";
-elif [ -f /opt/dsh-rescue/librescue.sh ]; then . /opt/dsh-rescue/librescue.sh;
-else echo '[entrypoint] WARN librescue.sh not found; auto-rollback disabled'; rescue_log() { :; }; profile_dir() { printf '%s/profiles/web' "$DSH_HOME"; }; rescue_snapshot_list() { :; }; rescue_live_differs_from() { echo 0; }; rescue_restore() { :; }; rescue_init_lifeboat() { :; }; fi
+# ===================== 救援模式 =====================
+# 加载共享库：优先 /opt/dsh-rescue（镜像内，独立于卷）。
+# 缺失时降级为「无自动回退」：定义 no-op，保证老镜像/精简镜像仍能正常 exec 启动。
+if [ -f /opt/dsh-rescue/librescue.sh ]; then
+  . /opt/dsh-rescue/librescue.sh
+else
+  echo '[entrypoint] WARN librescue.sh not found; auto-rollback DISABLED'
+  rescue_log() { :; }
+  rescue_snapshot_list() { :; }
+  rescue_live_differs_from() { echo 0; }
+  rescue_restore() { :; }
+  rescue_init_lifeboat() { :; }
+fi
 
 PORT_INNER=3081
 RESCUE_START_TIMEOUT="${RESCUE_START_TIMEOUT:-120}"
@@ -356,57 +379,60 @@ RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
 
 boot_lifeboat() {
-  echo '[entrypoint] RESCUE: booting clean lifeboat profile (no third-party plugins); data preserved';
+  echo '[entrypoint] RESCUE=1: booting clean lifeboat profile (no third-party plugins); data preserved'
   rescue_init_lifeboat
-  exec dsh --profile lifeboat --port $PORT_INNER --no-open
+  exec dsh --profile lifeboat --port $PORT_INNER --no-open $TRUSTED_ARGS
 }
 
 if [ "${RESCUE:-0}" = "1" ]; then boot_lifeboat; fi
 
-# 监督 + 自动回滚循环
+# 监督 + 自动回滚循环：把 dsh 作为子进程，启动窗口内探测 3081；
+# 失败且 live 插件树 != 最新快照 -> 回滚并重启，最多 RESCUE_KEEP 次；耗尽退出交给 restart。
 attempt=0
 has_snap=0
 [ -n "$(rescue_snapshot_list 2>/dev/null)" ] && has_snap=1
+max_attempt=$((RESCUE_KEEP + 1))
 while :; do
-  attempt=$((attempt+1))
-  echo "[entrypoint] boot attempt $attempt"
-  dsh web --port $PORT_INNER --no-open &
+  attempt=$((attempt + 1))
+  echo "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
+  dsh web --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
   child=$!
-  probe="$HERE/scripts/probe-ready.js"; [ -f "$probe" ] || probe=/opt/dsh-rescue/probe-ready.js
-  if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT*1000))"; then
+  probe=/opt/dsh-rescue/probe-ready.js
+  if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
     echo "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
-    wait "$child"; exit $?
+    wait "$child"
+    exit $?
   fi
-  echo "[entrypoint] dsh not ready in ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
+  echo "[entrypoint] dsh not ready within ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
   kill "$child" 2>/dev/null || true
   wait "$child" 2>/dev/null || true
-  if [ "$RESCUE_AUTO" = "on" ] && [ "$has_snap" = "1" ] && [ "$attempt" -lt "$((RESCUE_KEEP+1))" ]; then
+  if [ "$RESCUE_AUTO" = "on" ] && [ "$has_snap" = "1" ] && [ "$attempt" -lt "$max_attempt" ]; then
     newest=$(rescue_snapshot_list 2>/dev/null | tail -n1 | xargs -r basename)
-    differs=0; [ -n "$newest" ] && differs=$(rescue_live_differs_from "$newest" 2>/dev/null || echo 0)
+    differs=0
+    if [ -n "$newest" ]; then differs=$(rescue_live_differs_from "$newest" 2>/dev/null || echo 0); fi
     if [ -n "$newest" ] && [ "$differs" = "1" ]; then
       echo "[entrypoint] rolling back plugin tree to $newest"
-      if ! rescue_restore "$newest"; then
-        echo '[entrypoint] rollback FAILED -> lifeboat';
-        boot_lifeboat
-      fi
-      continue
+      if rescue_restore "$newest"; then continue; fi
+      echo '[entrypoint] rollback FAILED -> lifeboat'
+      boot_lifeboat
     fi
   fi
-  echo '[entrypoint] no rollback available/exhausted -> exiting for docker restart policy'
+  echo '[entrypoint] no rollback available/exhausted -> exit for docker restart policy'
   exit 1
 done
 ```
 
-- [ ] **步骤 2：静态校验** `sh -n entrypoint.sh`；`shellcheck -s sh entrypoint.sh`（若有）清零 error；逐行核对无 bash 专有语法。
-- [ ] **步骤 3：提交** `git add entrypoint.sh && git commit -m "feat(rescue): entrypoint 监督式启动 + 自动回滚 + 救生舱"`
+> 注意：原 58-69 行的 TRUSTED_ARGS 计算必须**留在被替换行之前**（即仍处于这段代码上方作用域），本段通过 shell 变量捕获它。替换只删掉最末 `exec dsh web ... $TRUSTED_ARGS` 那一行，其上的 TRUSTED_ARGS 循环保留。
 
+- [ ] **步骤 2：静态校验** `sh -n entrypoint.sh`；`shellcheck -s sh entrypoint.sh`（若有）清零 error；逐行核对无 bash 专有语法、$TRUSTED_ARGS 在两种 boot 均传入。
+- [ ] **步骤 3：提交** `git add entrypoint.sh && git commit -m "feat(rescue): entrypoint 监督式启动 + 自动回滚 + 救生舱"`
 ---
 
 ## 任务 6：Dockerfile + compose + .env 接线
 
 **文件**：Dockerfile、docker-compose.yml、.env.example。
 
-- [ ] **步骤 1：Dockerfile** 拷入工具到镜像并入 PATH（在现 COPY entrypoint.sh 附近追加）：
+- [ ] **步骤 1：Dockerfile** 拷入工具到镜像并入 PATH。插入位置：现 seed RUN（第 49-55 行）之后、COPY entrypoint.sh（第 66 行）之前任意处。`/opt/dsh-rescue` 是镜像层路径，**不**在 /opt/dsh 卷内、也不随首启 seed 清理丢失；因此本镜像必须重建（`docker compose up -d --build`）后 rescue 工具才生效——对已部署的旧容器，要获得自动回退能力需重建并 `docker compose up -d`（数据卷不变）：
 
 ```dockerfile
 # 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
@@ -415,8 +441,8 @@ ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
 RUN chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
 ```
 
-> 注意：rescue 的 HERE 指向 /opt/dsh-rescue，其内 librescue.sh 用 source /opt/dsh-rescue/librescue.sh（任务 3 步骤 1 代码需保证在镜像路径下能正确 source；本地开发以仓库根运行则 source $HERE/scripts/librescue.sh）。实现时对 rescue 做双路径兼容。
-- [ ] **步骤 2：docker-compose.yml** environment 追加：
+> 注意：rescue 的 HERE 指向 /opt/dsh-rescue，其内 librescue.sh 用 source /opt/dsh-rescue/librescue.sh（任务 3 步骤 1 代码需保证在镜像路径下能正确 source；本地开发以仓库根运行则 source $HERE/scripts/librescue.sh）。实现时对 rescue 做双路径兼容。\n> 另：entrypoint 在 Dockerfile 里有 CRLF 清洗，rescue/librescue/probe-ready/lifeboat 模板同为仓库文本文件也可能带 Windows CRLF，故拷入 /opt/dsh-rescue 的脚本也要统一做一次行尾清洗再 chmod（与 entrypoint 的 sed 一致），避免 CR 混入 POSIX 脚本。
+- [ ] **步骤 2：docker-compose.yml** 在 environment 的 DSH_TRUSTED_HOSTS（现第 49 行）之后追加（缩进与上对齐）：
 ```yaml
       - RESCUE=${RESCUE:-0}
       - RESCUE_AUTO=${RESCUE_AUTO:-on}
@@ -424,7 +450,7 @@ RUN chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-resc
       - RESCUE_KEEP=${RESCUE_KEEP:-3}
       - RESCUE_PROFILE=${RESCUE_PROFILE:-web}
 ```
-- [ ] **步骤 3：.env.example** 在文件末尾加注释说明：RESCUE=1 进救生舱（clean lifeboat）；RESCUE_AUTO=off 关闭自动回退；RESCUE_START_TIMEOUT=120 启动窗口秒数；RESCUE_KEEP=3 快照保留份数。
+- [ ] **步骤 3：.env.example** 在 DSH_TRUSTED_HOSTS 之后追加块：RESCUE=0；RESCUE_AUTO=on；RESCUE_START_TIMEOUT=120；RESCUE_KEEP=3；RESCUE_PROFILE=web。并注释：RESCUE=1 时 docker compose up -d 进救生舱 lifeboat，回到 0 恢复正常。
 - [ ] **步骤 4：静态校验** 手动核对 YAML 缩进与变量名；无 docker 环境则跳过 `docker compose config`，改 `python3 -c "import yaml,sys;yaml.safe_load(open('docker-compose.yml'))"`（如有 pyyaml）或目检。
 - [ ] **步骤 5：提交** `git add Dockerfile docker-compose.yml .env.example && git commit -m "feat(rescue): Dockerfile/compose/env 接线"`
 
@@ -474,6 +500,7 @@ echo '== 结束：核对日志含 rollback-to + healthy 即通过 =='
 - 救生舱 `dsh --profile lifeboat` 需真实环境确认能绑定同一 $DSH_HOME 起干净 web；RESCUE=1 时单实例端口 3081 不冲突。
 - 镜像内 HERE/LIFEBOAT_TMPL 双路径（仓库根 vs /opt/dsh-rescue）需任务 3/4/6 统一；entrypoint 有 librescue 缺失时的 no-op 降级，保证旧镜像也能跑。
 - 镜像内不含 rescue 的旧镜像用户需重建镜像（docker compose up -d --build）才能获得本能力；数据卷无需迁移。
+- **seed 架构风险（2026-09-07）**：/opt/dsh-seed 首启复制后即 rm -rf，容器内无法重放主程序 seed；主程序恢复只能容器内 npm 重装（需 npm 源可达）或重建含 seed 的新容器（数据卷保留）。自动回退与救生舱只动 profiles 插件树，不受此限。DSH_TRUSTED_HOSTS 为空时不追加 --trusted-host，两种 boot 行为与旧版一致。
 
 ---
 
