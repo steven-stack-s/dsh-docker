@@ -34,7 +34,8 @@ set -eu
 
 CONTAINER="${DHS_E2E_CONTAINER:-dsh}"
 PROFILE="${RESCUE_PROFILE:-web}"
-PROF_DIR="/data/dsh/profiles/$PROFILE"
+# PASS 后自动回滚已把 profile 还原为良好快照，置 1 让 cleanup 不再重复恢复/重启
+already_restored=0
 # 默认最长轮询等待 = RESCUE_START_TIMEOUT + 40；可显式覆盖
 E2E_MAX_WAIT_SECS="${E2E_MAX_WAIT_SECS:-}"
 POLL_INTERVAL=10
@@ -63,10 +64,16 @@ start_mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ---------- 步骤 5 恢复现场放在 trap/finally：任何失败/中断/正常结束都会执行 ----------
 cleanup() {
   log "步骤 5 恢复现场（trap 触发）..."
-  # 容器在轮询失败后可能处于 crashloop/重启中，docker exec 未必可用 → 全部 || true
-  docker exec -e PROF="$PROFILE" "$CONTAINER" sh -c '[ -f /tmp/pkg.bak ] && cd /data/dsh/profiles/$PROF && cp /tmp/pkg.bak package.json && rm -f /tmp/pkg.bak' 2>/dev/null || true
-  docker restart "$CONTAINER" 2>/dev/null || true
-  log "现场已恢复（package.json 已还原，容器已请求重启）；请稍候确认 dsh 回到 healthy。"
+  # 容器在轮询失败/中断后可能处于 crashloop/重启中，docker exec 未必可用 → 全部 || true
+  if [ "$already_restored" -eq 0 ]; then
+    docker exec -e PROF="$PROFILE" "$CONTAINER" sh -c '[ -f /tmp/pkg.bak ] && cd /data/dsh/profiles/$PROF && cp /tmp/pkg.bak package.json && rm -f /tmp/pkg.bak' 2>/dev/null || true
+    docker restart "$CONTAINER" 2>/dev/null || true
+    log "现场已恢复（package.json 已还原，容器已请求重启）；请稍候确认 dsh 回到 healthy。"
+  else
+    # PASS 路径：自动回滚已把 profile 还原为良好快照，无需改 package.json / 无需再重启；仅清理临时备份
+    docker exec "$CONTAINER" sh -c 'rm -f /tmp/pkg.bak' 2>/dev/null || true
+    log "PASS 路径：自动回滚已还原 profile，仅清理 /tmp/pkg.bak（不再重复重启）。"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -117,6 +124,7 @@ docker logs "$CONTAINER" --since "$start_mark" --tail 200 2>/dev/null | grep -iE
 echo
 
 if [ "$rollback_seen" -eq 1 ] && [ "$healthy_seen" -eq 1 ]; then
+  already_restored=1
   echo "[e2e] PASS ✅ 自动回滚到快照并已恢复健康（rollback + healthy 均已观察到）"
   exit 0
 fi
