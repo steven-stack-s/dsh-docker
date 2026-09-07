@@ -43,5 +43,11 @@ grep -q '"phase":"runtime"' "$R/d.json" || fail d-phase
 # lastChange.pkg=@scope/bad-plugin != offender @other/pkg -> isLastAdded false -> heal rollback（有基线）
 grep -q '"recommendedHeal":"rollback"' "$R/d.json" || { echo "D="$(cat "$R/d.json"); fail d-rollback; }
 
+
+# E. --write-incident：产出的 incident body 含 id/redline/selfHeal/evidenceRef
+printf '%s\n' 'remove-plugin|@scope/bad-plugin|2026-09-07T10:06:00+08:00|ok' > "$T/journal.txt"
+node "$ROOT/scripts/diagnose.js" --phase boot --evidence "$R/evidence/boot-a" --rescue-dir "$R"   --write-incident --journal "$T/journal.txt" --trigger probe-timeout --evidence-ref evidence/boot-a > "$R/e.json"
+node -e "const o=require('$R/e.json'); if(!o.id||!o.id.startsWith('inc-'))process.exit(1); if(o.redline.cordisPatchTouched!==false)process.exit(2); if(o.selfHeal.actions.length!==1)process.exit(3); if(o.evidenceRef!=='evidence/boot-a')process.exit(4);" || fail e-incident
+grep -q '"outcome":"recovered-remove"' "$R/e.json" || fail e-outcome
 echo 'ALL-PASS'
 
