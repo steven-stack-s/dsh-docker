@@ -78,6 +78,19 @@ After a healthy boot the entrypoint keeps waiting on dsh; if dsh later crashes t
 docker logs dsh --tail 100 | grep -iE 'rollback|healthy|rescue'
 ```
 
+**Audit log.** Beyond the container log, every rescue event is also appended to a file inside the data volume — **`$DSH_HOME/.rescue/log/rescue.log`** (host default `./dsh/.rescue/log/rescue.log`), so you can audit rescue history even if the container log is gone. Entries include manual `snapshot` / `restore apply|done` / `prune`, plus the auto events now recorded by the entrypoint:
+
+```bash
+tail -20 /data/dsh/.rescue/log/rescue.log      # inside the container
+# e.g. 2026-09-07T15:35:24+0800 restore done snap-0002
+#      2026-09-07T17:12:00+0800 auto-rollback start -> snap-0001
+#      2026-09-07T17:12:03+0800 auto-rollback done -> snap-0001
+#      2026-09-07T17:12:10+0800 lifeboat enter: rollback FAILED
+#      2026-09-07T17:13:00+0800 boot exhausted, no rollback available; exit for docker restart policy
+```
+
+`rescue status` shows the same file's tail as its “last event log”.
+
 ## 5. Lifeboat
 
 When the plugin tree is broken beyond what auto-rollback can fix, a **clean minimal profile** boots a web with no third-party plugins (only the DSH core), still bound to the same `$DSH_HOME` — your data stays readable, bad plugins are simply not loaded, and you can remove the bad plugin / edit cordis.patch.yml / reinstall the program.
