@@ -67,4 +67,73 @@ if [ -n "$DSH_TRUSTED_HOSTS" ]; then
     TRUSTED_ARGS="$TRUSTED_ARGS --trusted-host $h"
   done
 fi
-exec dsh web --port 3081 --no-open $TRUSTED_ARGS
+# ===================== 救援模式 =====================
+# 加载共享库：优先 /opt/dsh-rescue（镜像内，独立于卷）。
+# 缺失时降级为「无自动回退」：定义 no-op，保证老镜像/精简镜像仍能正常 exec 启动。
+if [ -f /opt/dsh-rescue/librescue.sh ]; then
+  . /opt/dsh-rescue/librescue.sh
+else
+  echo '[entrypoint] WARN librescue.sh not found; auto-rollback DISABLED'
+  rescue_log() { :; }
+  rescue_snapshot_list() { :; }
+  rescue_live_differs_from() { echo 0; }
+  rescue_restore() { :; }
+  rescue_init_lifeboat() { :; }
+fi
+
+PORT_INNER=3081
+RESCUE_START_TIMEOUT="${RESCUE_START_TIMEOUT:-120}"
+RESCUE_AUTO="${RESCUE_AUTO:-on}"
+RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
+RESCUE_KEEP="${RESCUE_KEEP:-3}"
+
+boot_lifeboat() {
+  echo '[entrypoint] RESCUE=1: booting clean lifeboat profile (no third-party plugins); data preserved'
+  rescue_init_lifeboat
+  exec dsh --profile lifeboat --port $PORT_INNER --no-open $TRUSTED_ARGS
+}
+
+if [ "${RESCUE:-0}" = "1" ]; then boot_lifeboat; fi
+
+# 监督 + 自动回滚循环：把 dsh 作为子进程，启动窗口内探测 3081；
+# 失败且 live 插件树 != 最新快照 -> 回滚并重启，最多 RESCUE_KEEP 次；耗尽退出交给 restart。
+attempt=0
+has_snap=0
+[ -n "$(rescue_snapshot_list 2>/dev/null)" ] && has_snap=1
+max_attempt=$((RESCUE_KEEP + 1))
+probe=/opt/dsh-rescue/probe-ready.js
+# [entrypoint] 控制器裁决：probe-ready.js 缺失（/opt/dsh-rescue 整体缺失/精简镜像/手工替换）
+# 时无法监督 -> 降级为原始前台 exec，保证慢启动的健康 dsh 不被误杀。
+if [ ! -f "$probe" ]; then
+  echo '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
+  exec dsh web --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
+fi
+while :; do
+  attempt=$((attempt + 1))
+  echo "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
+  dsh web --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
+  child=$!
+  probe=/opt/dsh-rescue/probe-ready.js
+  if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
+    echo "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
+    wait "$child"
+    exit $?
+  fi
+  echo "[entrypoint] dsh not ready within ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
+  kill "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  if [ "$RESCUE_AUTO" = "on" ] && [ "$has_snap" = "1" ] && [ "$attempt" -lt "$max_attempt" ]; then
+    newest=$(rescue_snapshot_list 2>/dev/null | tail -n1 | xargs -r basename)
+    differs=0
+    if [ -n "$newest" ]; then differs=$(rescue_live_differs_from "$newest" 2>/dev/null || echo 0); fi
+    if [ -n "$newest" ] && [ "$differs" = "1" ]; then
+      echo "[entrypoint] rolling back plugin tree to $newest"
+      if rescue_restore "$newest"; then continue; fi
+      echo '[entrypoint] rollback FAILED -> lifeboat'
+      boot_lifeboat
+    fi
+  fi
+  echo '[entrypoint] no rollback available/exhausted -> exit for docker restart policy'
+  exit 1
+done
+
