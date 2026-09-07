@@ -1,6 +1,18 @@
 #!/bin/sh
 set -eu
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 先沿符号链接解析出脚本真实路径，兼容：repo-root(sh rescue)、镜像真实路径(/opt/dsh-rescue/rescue)、
+# 镜像软链部署(bare rescue -> /usr/local/bin/rescue)。解析循环最多跑有限次，防自指软链死循环。
+SELF=$0
+i=0
+while [ -L "$SELF" ] && [ "$i" -lt 20 ]; do
+  i=$((i+1))
+  LINK=$(readlink "$SELF")
+  case "$LINK" in
+    /*) SELF=$LINK ;;
+    *)  SELF=$(dirname "$SELF")/$LINK ;;
+  esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
 if [ -f "$HERE/scripts/librescue.sh" ]; then
   . "$HERE/scripts/librescue.sh"        # repo-root layout (local dev / test)
 else
