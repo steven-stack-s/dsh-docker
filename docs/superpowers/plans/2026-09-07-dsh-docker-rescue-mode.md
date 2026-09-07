@@ -441,7 +441,8 @@ ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
 RUN chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
 ```
 
-> 注意：rescue 的 HERE 指向 /opt/dsh-rescue，其内 librescue.sh 用 source /opt/dsh-rescue/librescue.sh（任务 3 步骤 1 代码需保证在镜像路径下能正确 source；本地开发以仓库根运行则 source $HERE/scripts/librescue.sh）。实现时对 rescue 做双路径兼容。\n> 另：entrypoint 在 Dockerfile 里有 CRLF 清洗，rescue/librescue/probe-ready/lifeboat 模板同为仓库文本文件也可能带 Windows CRLF，故拷入 /opt/dsh-rescue 的脚本也要统一做一次行尾清洗再 chmod（与 entrypoint 的 sed 一致），避免 CR 混入 POSIX 脚本。
+> 注意：rescue 的 HERE 指向 /opt/dsh-rescue，其内 librescue.sh 用 source /opt/dsh-rescue/librescue.sh（任务 3 步骤 1 代码需保证在镜像路径下能正确 source；本地开发以仓库根运行则 source $HERE/scripts/librescue.sh）。实现时对 rescue 做双路径兼容。
+> 另：entrypoint 在 Dockerfile 里有 CRLF 清洗，rescue/librescue/probe-ready/lifeboat 模板同为仓库文本文件也可能带 Windows CRLF，故拷入 /opt/dsh-rescue 的脚本也要统一做一次行尾清洗再 chmod（与 entrypoint 的 sed 一致），避免 CR 混入 POSIX 脚本。
 - [ ] **步骤 2：docker-compose.yml** 在 environment 的 DSH_TRUSTED_HOSTS（现第 49 行）之后追加（缩进与上对齐）：
 ```yaml
       - RESCUE=${RESCUE:-0}
