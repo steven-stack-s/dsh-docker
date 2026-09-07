@@ -42,7 +42,19 @@ function parseArgs(argv) {
     else if (argv[i] === '--evidence') a.evidence = argv[++i];
     else if (argv[i] === '--rescue-dir') a.rescueDir = argv[++i];
     else if (argv[i] === '--log') a.log = argv[++i];
-    else if (argv[i] === '--json-in') a.jsonIn = argv[++i]; // 测试注入
+    else if (argv[i] === '--json-in') a.jsonIn = argv[++i];
+    else if (argv[i] === '--id') a.id = argv[++i];
+    else if (argv[i] === '--trigger') a.trigger = argv[++i];
+    else if (argv[i] === '--evidence-ref') a.evidenceRef = argv[++i];
+    else if (argv[i] === '--journal') a.journal = argv[++i];
+    else if (argv[i] === '--resolve') a.resolve = argv[++i];
+    else if (argv[i] === '--write-incident') a.writeIncident = 1;
+    else if (argv[i] === '--id') a.id = argv[++i];
+    else if (argv[i] === '--trigger') a.trigger = argv[++i];
+    else if (argv[i] === '--evidence-ref') a.evidenceRef = argv[++i];
+    else if (argv[i] === '--journal') a.journal = argv[++i];
+    else if (argv[i] === '--resolve') a.resolve = argv[++i];
+    else if (argv[i] === '--write-incident') a.writeIncident = 1; // 测试注入
   }
   return a;
 }
@@ -125,21 +137,72 @@ function diagnose(opts) {
   }
   return r;
 }
-module.exports = { diagnose, buildChangeContext, extractPluginName };
+// ---- incident 组装（写盘由 entrypoint 用 librescue 完成，此处只产 body + id）----
+function genIncidentId() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const ts = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + 'T' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  let rnd = '';
+  try { rnd = require('node:crypto').randomBytes(2).toString('hex'); } catch (e) { rnd = '' + process.pid; }
+  return 'inc-' + ts + '-' + rnd;
+}
+// journal：entrypoint 把自愈动作逐行 append（每行 kind|target|ts|outcome）
+function readJournal(jfile) {
+  const acts = [];
+  if (!jfile) return acts;
+  let txt = '';
+  try { txt = fs.readFileSync(jfile, 'utf8'); } catch (e) { return acts; }
+  for (const line of txt.split(/\n/)) {
+    const m = line.match(/^(\S+)\|(.*?)\|(\S+)\|(\S+)$/);
+    if (m) acts.push({ kind: m[1], target: m[2], ts: m[3], outcome: m[4] });
+  }
+  return acts;
+}
+function makeIncident(rec, opts) {
+  const sh0 = { recommended: rec.recommendedHeal, target: rec.recommendedTarget || null, actions: readJournal(opts.journal) };
+  const sh = { ...sh0, outcome: opts.resolve || resolveOutcome(sh0) };
+  // redline 断言：本实现所有自愈动作只动插件树四件套；若 journal 出现 kind 涉及 patch/用户数据（不应有），标 true
+  const redTouched = sh.actions.some((a) => a.kind === 'patch' || a.kind === 'user-data');
+  return {
+    id: opts.id || genIncidentId(),
+    created: new Date().toISOString(),
+    phase: rec.phase, trigger: opts.trigger || 'auto',
+    symptom: rec.symptom || {},
+    changeContext: rec.changeContext || {},
+    rootCause: rec.rootCause || {},
+    selfHeal: sh,
+    evidenceRef: opts.evidenceRef || null,
+    redline: { cordisPatchTouched: !!redTouched, userDataTouched: false },
+  };
+}
+function resolveOutcome(sh) {
+  if (!sh.actions.length) return 'report-only';
+  if (sh.actions.some((a) => a.outcome === 'fail')) return 'unrecovered';
+  const ok = sh.actions.filter((a) => a.outcome === 'ok');
+  const lastOk = ok[ok.length - 1];
+  if (!lastOk) return 'unrecovered';
+  return lastOk.kind === 'remove-plugin' ? 'recovered-remove' : lastOk.kind === 'rollback' ? 'recovered-rollback' : 'recovered';
+}
+module.exports = { diagnose, buildChangeContext, extractPluginName, makeIncident, resolveOutcome };
 if (require.main === module) {
   const args = parseArgs(process.argv.slice(2));
   let evidDir = args.evidence;
   let rescueDir = args.rescueDir || '';
   if (args.jsonIn) {
-    // 测试/调用方直接注入已组好的上下文（对 entrypoint 复用）
     const inj = JSON.parse(args.jsonIn);
     const result = { ...inj, phase: args.phase || inj.phase || 'boot' };
     process.stdout.write(JSON.stringify(result));
     process.exit(0);
   }
-  if (!evidDir) { console.error('usage: node diagnose.js --phase boot|runtime --evidence <dir> [--rescue-dir <dir>]'); process.exit(2); }
+  if (!evidDir && !args.writeIncident) { console.error('usage: node diagnose.js --phase boot|runtime --evidence <dir> [--rescue-dir <dir>] [--write-incident 1] [--journal <f>] [--trigger <t>] [--evidence-ref <r>] [--resolve <outcome>]'); process.exit(2); }
   if (!rescueDir && process.env.DSH_HOME) rescueDir = path.join(process.env.DSH_HOME, '.rescue');
   const r = diagnose({ phase: args.phase, evidence: evidDir, rescueDir });
-  process.stdout.write(JSON.stringify(r));
+  if (args.writeIncident) {
+    const sh0 = { recommended: r.recommendedHeal, target: r.recommendedTarget || null, actions: readJournal(args.journal), outcome: args.resolve || resolveOutcome({ actions: readJournal(args.journal) }) };
+    const inc = makeIncident(r, { id: args.id, trigger: args.trigger, evidenceRef: args.evidenceRef, journal: args.journal, resolve: args.resolve });
+    process.stdout.write(JSON.stringify(inc));
+  } else {
+    process.stdout.write(JSON.stringify(r));
+  }
   process.exit(0);
 }
