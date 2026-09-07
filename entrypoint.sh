@@ -88,7 +88,10 @@ RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
 
 boot_lifeboat() {
-  echo '[entrypoint] RESCUE=1: booting clean lifeboat profile (no third-party plugins); data preserved'
+  # $1 = 进入 lifeboat 的原因（缺省=显式 RESCUE=1）；用于 echo 与审计日志，区分用户手动进 vs 回滚失败兜底进
+  reason="${1:-rescue requested (RESCUE=1)}"
+  echo "[entrypoint] booting clean lifeboat profile ($reason); no third-party plugins; data preserved"
+  rescue_log "lifeboat enter: $reason"
   rescue_init_lifeboat
   exec dsh --profile lifeboat --port $PORT_INNER --no-open $TRUSTED_ARGS
 }
@@ -128,12 +131,18 @@ while :; do
     if [ -n "$newest" ]; then differs=$(rescue_live_differs_from "$newest" 2>/dev/null || echo 0); fi
     if [ -n "$newest" ] && [ "$differs" = "1" ]; then
       echo "[entrypoint] rolling back plugin tree to $newest"
-      if rescue_restore "$newest"; then continue; fi
+      rescue_log "auto-rollback start -> $newest"
+      if rescue_restore "$newest"; then
+        rescue_log "auto-rollback done -> $newest"
+        continue
+      fi
       echo '[entrypoint] rollback FAILED -> lifeboat'
-      boot_lifeboat
+      rescue_log "auto-rollback FAILED ($newest)"
+      boot_lifeboat 'rollback FAILED'
     fi
   fi
   echo '[entrypoint] no rollback available/exhausted -> exit for docker restart policy'
+  rescue_log 'boot exhausted, no rollback available; exit for docker restart policy'
   exit 1
 done
 

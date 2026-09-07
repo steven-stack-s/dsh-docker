@@ -23,7 +23,7 @@ ARG PNPM_VERSION=latest
 # 默认空即用 debian 官方源。对 Debian 12 (bookworm) 的 sources.list 类型自动适配。
 ARG APT_MIRROR=
 
-# DSH 运行依赖：git、ca-certificates（HTTPS）、tzdata（时区）、socat（端口转发）
+# DSH 运行依赖：git、ca-certificates（HTTPS）、tzdata（时区）、socat（端口转发）、openssh-client（容器内 ssh 出去）
 # socat 用途（勿删）：dsh web 刻意只监听 127.0.0.1:3081
 # （--host 0.0.0.0 被官方安全拒绝），socat 把外部 0.0.0.0:3080 转发到 127.0.0.1:3081。
 RUN if [ -n "$APT_MIRROR" ]; then \
@@ -39,6 +39,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         ca-certificates \
         tzdata \
         socat \
+        openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # npm 全局前缀改到 /opt/dsh：该目录整体挂载到宿主机卷，
