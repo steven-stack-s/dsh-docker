@@ -25,7 +25,7 @@ cp .env.example .env            # edit .env, fill in DEEPSEEK_API_KEY
 # 2. Start (on first boot, DSH is copied from the in-image seed; ready in seconds)
 docker compose up -d
 
-# 3. Access — open http://<host-ip>:3080 and create the first admin account
+# 3. Access — open http://<host-ip>:3080/?token=xxxxxxxx and create the first admin account
 ```
 
 Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
