@@ -64,7 +64,11 @@ WORKDIR /workspace
 EXPOSE 3080
 
 # 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
-COPY scripts/librescue.sh scripts/probe-ready.js rescue profiles/lifeboat.tmpl /opt/dsh-rescue/
+# Docker 的 COPY <src> 为目录时只复制其【内容】到目标、不保留目录本身；故先 mkdir 目标目录、
+# 再以 <dir>/. 结尾复制，确保内容落在 /opt/dsh-rescue/lifeboat.tmpl/ 子目录（LIFEBOAT_TMPL 语义）。
+COPY scripts/librescue.sh scripts/probe-ready.js rescue /opt/dsh-rescue/
+RUN mkdir -p /opt/dsh-rescue/lifeboat.tmpl
+COPY profiles/lifeboat.tmpl/. /opt/dsh-rescue/lifeboat.tmpl/
 ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
 RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
     && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
