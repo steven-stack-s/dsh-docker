@@ -47,6 +47,12 @@ services:
       #   局域网 IP 或隧道域名访问时必须填入，否则页面能开但连接异常（/api 403）。
       #   逗号分隔，可带端口，如 "192.168.1.5:3080,app.xx.ugdocker.link"
       - DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-}
+      # 救生舱（lifeboat）开关：RESCUE=1 时 entrypoint 进救生舱（回退到固定 dsh 版本）
+      - RESCUE=${RESCUE:-0}
+      - RESCUE_AUTO=${RESCUE_AUTO:-on}
+      - RESCUE_START_TIMEOUT=${RESCUE_START_TIMEOUT:-120}
+      - RESCUE_KEEP=${RESCUE_KEEP:-3}
+      - RESCUE_PROFILE=${RESCUE_PROFILE:-web}
 
     volumes:
       # DSH 程序本体（npm 全局包 + dsh/pnpm 命令）——升级与插件管理写入这里

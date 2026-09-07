@@ -63,6 +63,13 @@ ENV TZ=Asia/Shanghai
 WORKDIR /workspace
 EXPOSE 3080
 
+# 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
+COPY scripts/librescue.sh scripts/probe-ready.js rescue profiles/lifeboat.tmpl /opt/dsh-rescue/
+ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
+RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
+    && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
+    && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
+
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
 RUN chmod +x /usr/local/bin/dsh-entrypoint \
     && sed -i 's/\r$//' /usr/local/bin/dsh-entrypoint   # 兼容 Windows 开发的 CRLF 换行
