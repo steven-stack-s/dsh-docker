@@ -23,7 +23,7 @@ ARG PNPM_VERSION=latest
 # 默认空即用 debian 官方源。对 Debian 12 (bookworm) 的 sources.list 类型自动适配。
 ARG APT_MIRROR=
 
-# DSH 运行依赖：git、ca-certificates（HTTPS）、tzdata（时区）、socat（端口转发）
+# DSH 运行依赖：git、ca-certificates（HTTPS）、tzdata（时区）、socat（端口转发）、openssh-client（容器内 ssh 出去）
 # socat 用途（勿删）：dsh web 刻意只监听 127.0.0.1:3081
 # （--host 0.0.0.0 被官方安全拒绝），socat 把外部 0.0.0.0:3080 转发到 127.0.0.1:3081。
 RUN if [ -n "$APT_MIRROR" ]; then \
@@ -39,6 +39,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         ca-certificates \
         tzdata \
         socat \
+        openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # npm 全局前缀改到 /opt/dsh：该目录整体挂载到宿主机卷，
@@ -62,6 +63,17 @@ ENV TZ=Asia/Shanghai
 
 WORKDIR /workspace
 EXPOSE 3080
+
+# 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
+# Docker 的 COPY <src> 为目录时只复制其【内容】到目标、不保留目录本身；故先 mkdir 目标目录、
+# 再以 <dir>/. 结尾复制，确保内容落在 /opt/dsh-rescue/lifeboat.tmpl/ 子目录（LIFEBOAT_TMPL 语义）。
+COPY scripts/librescue.sh scripts/probe-ready.js rescue /opt/dsh-rescue/
+RUN mkdir -p /opt/dsh-rescue/lifeboat.tmpl
+COPY profiles/lifeboat.tmpl/. /opt/dsh-rescue/lifeboat.tmpl/
+ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
+RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
+    && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
+    && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
 
 COPY entrypoint.sh /usr/local/bin/dsh-entrypoint
 RUN chmod +x /usr/local/bin/dsh-entrypoint \

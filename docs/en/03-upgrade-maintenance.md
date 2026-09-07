@@ -30,6 +30,8 @@ docker restart dsh
 
 Plugins and data are written to the `/data/dsh` volume, and survive container rebuilds/restarts.
 
+> ⚠ Plugin changes (especially update/install) are the most frequent cause of startup failure. Prefer the wrapped commands in [06 · Rescue Mode](06-rescue-mode.md) for installing plugins (they snapshot automatically before the change); if a broken plugin stops the container from starting, the entrypoint rolls back automatically.
+
 ## 3. Change the API Key
 
 ```bash
