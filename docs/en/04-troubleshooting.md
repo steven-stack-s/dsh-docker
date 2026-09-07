@@ -11,6 +11,7 @@
 | `crypto.randomUUID is not a function` | Accessing from a non-HTTPS / non-localhost origin (browser secure context) | Use `localhost`, an SSH tunnel, or a reverse proxy with HTTPS (see [02](02-authentication-remote-access.md)) |
 | Copying from the seed on first boot is slow | Windows + WSL bind mount crosses filesystems | Seconds on Linux; on Windows, use a docker named volume or wait for the first copy |
 | `docker compose up` reports `DEEPSEEK_API_KEY` not set | `.env` is not configured | Run `cp .env.example .env` and fill in the key |
+| Container won't start / repeated crashloop | Broken plugin fails to boot; auto-rollback didn't fire (no snapshot / RESCUE_AUTO=off / rescue tooling not installed) | Check the logs for `rolling back` / `lifeboat` markers; rebuild the image or use the [06 · Rescue Mode](06-rescue-mode.md) lifeboat to remove the bad plugin |
 
 ## Configure models with curl on the host
 

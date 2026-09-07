@@ -41,6 +41,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 | [docs/en/03-upgrade-maintenance.md](docs/en/03-upgrade-maintenance.md) | Upgrade, plugins, keys, backup |
 | [docs/en/04-troubleshooting.md](docs/en/04-troubleshooting.md) | Troubleshooting |
 | [docs/en/05-platform-differences.md](docs/en/05-platform-differences.md) | Linux / NAS / Docker Desktop differences |
+| [docs/en/06-rescue-mode.md](docs/en/06-rescue-mode.md) | Plugin rescue mode: auto-rollback + lifeboat |
 
 ---
 
@@ -49,7 +50,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 ```
 .
 ├── docker-compose.yml        # deployment config (vars in .env.example)
-├── Dockerfile                # base image: node:24 + git + socat + pre-baked dsh seed
+├── Dockerfile                # base image: node:24 + git + socat + openssh-client + pre-baked dsh seed
 ├── entrypoint.sh             # container entry: copy DSH from seed → socat forward → start web
 ├── .env.example              # env template (copy to .env)
 ├── docs/
@@ -69,7 +70,7 @@ Browser
 Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 ```
 
-- At build time, dsh+pnpm are pre-installed into a seed (`/opt/dsh-seed`); the runtime also includes `node:24-slim` + git + ca-certificates + tzdata + socat.
+- At build time, dsh+pnpm are pre-installed into a seed (`/opt/dsh-seed`); the runtime also includes `node:24-slim` + git + ca-certificates + tzdata + socat + openssh-client.
 - On first boot, `entrypoint.sh` copies the seed to the mounted volume `/opt/dsh` (in seconds, offline, version-pinned); pnpm comes along with the seed.
 - Custom build: `docker build --build-arg DSH_VERSION=<version> --build-arg APT_MIRROR=mirrors.aliyun.com -t dsh-docker:<version> .`
 - Three persistent volumes: `./programs` (DSH program), `./dsh` (DSH_HOME user data), `./workspace` (agent workspace).

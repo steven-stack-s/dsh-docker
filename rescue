@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+# 先沿符号链接解析出脚本真实路径，兼容：repo-root(sh rescue)、镜像真实路径(/opt/dsh-rescue/rescue)、
+# 镜像软链部署(bare rescue -> /usr/local/bin/rescue)。解析循环最多跑有限次，防自指软链死循环。
+SELF=$0
+i=0
+while [ -L "$SELF" ] && [ "$i" -lt 20 ]; do
+  i=$((i+1))
+  LINK=$(readlink "$SELF")
+  case "$LINK" in
+    /*) SELF=$LINK ;;
+    *)  SELF=$(dirname "$SELF")/$LINK ;;
+  esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+if [ -f "$HERE/scripts/librescue.sh" ]; then
+  . "$HERE/scripts/librescue.sh"        # repo-root layout (local dev / test)
+else
+  . "$HERE/librescue.sh"                  # image flat layout /opt/dsh-rescue
+fi
+cmd="${1:-}"
+[ -n "$cmd" ] || { echo 'usage: rescue <snapshot|plugin|rollback|dsh-upgrade|dsh-reinstall|status|doctor|lifeboat>'; exit 2; }
+shift
+
+case "$cmd" in
+  snapshot) rescue_snapshot ;;
+  status)
+    echo "RESCUE_DIR=$RESCUE_DIR  KEEP=$RESCUE_KEEP  profile=$(profile_dir)"
+    echo 'snapshots:'
+    rescue_snapshot_list | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    echo 'last log:'
+    tail -n5 "$LOG_FILE" 2>/dev/null || true
+    ;;
+  doctor)
+    pdir=$(profile_dir)
+    [ -d "$pdir" ] && echo "ok profile dir: $pdir" || echo "MISSING profile dir: $pdir"
+    [ -f "$pdir/package.json" ] && echo 'package.json present' || echo 'package.json MISSING'
+    echo 'snapshots:'
+    rescue_snapshot_list | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    echo 'read-only diagnostic done'
+    ;;
+  plugin)
+    [ "$#" -gt 0 ] || { echo 'usage: rescue plugin <pnpm args> e.g. add pkg'; exit 2; }
+    rescue_snapshot >/dev/null 2>&1 || rescue_log 'plugin: snapshot skipped'
+    dsh plugin --profile "$RESCUE_PROFILE" "$@"
+    ;;
+  rollback)
+    list=$(rescue_snapshot_list)
+    newest=$(echo "$list" | tail -n1 | xargs -r basename)
+    [ -n "$newest" ] || { echo 'no snapshot to rollback to'; exit 1; }
+    rescue_restore "$newest"
+    echo "restored $newest; restart container: docker restart dsh"
+    ;;
+  dsh-upgrade)
+    target="${1:-}"
+    [ -n "$target" ] || { echo 'usage: rescue dsh-upgrade <版本>'; exit 2; }
+    v=$(dsh --version 2>/dev/null || echo unknown)
+    mkdir -p "$RESCUE_DIR"
+    printf '%s\n' "$v" > "$RESCUE_DIR/dsh-version-last-good.txt"
+    rescue_log "dsh-upgrade: record last-good $v, installing $target"
+    if [ -n "${NPM_REGISTRY:-}" ]; then npm install -g "@deepseek-ai/dsh@$target" --registry="$NPM_REGISTRY"; else npm install -g "@deepseek-ai/dsh@$target"; fi
+    echo 'upgraded; restart container: docker restart dsh'
+    ;;
+  dsh-reinstall)
+    # 主程序 seed 已在首启 rm -rf，无法容器内重放镜像 seed；
+    # 可靠恢复 = 按 last-good 版本容器内重装（覆盖 /opt/dsh）。
+    # 若连 npm 源都不可达，则只能重建含 seed 的镜像容器（任务 6 文档说明）。
+    vf="$RESCUE_DIR/dsh-version-last-good.txt"
+    [ -f "$vf" ] || { echo "no recorded version: $vf"; exit 1; }
+    v=$(cat "$vf")
+    rescue_log "dsh-reinstall to $v"
+    if [ -n "${NPM_REGISTRY:-}" ]; then npm install -g "@deepseek-ai/dsh@$v" --registry="$NPM_REGISTRY"; else npm install -g "@deepseek-ai/dsh@$v"; fi
+    echo 'reinstalled; restart container: docker restart dsh'
+    ;;
+  lifeboat)
+    echo 'set RESCUE=1 in .env then: docker compose up -d  (boots clean lifeboat)'
+    ;;
+  *) echo "unknown subcommand: $cmd"; exit 2 ;;
+esac

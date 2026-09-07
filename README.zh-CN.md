@@ -42,6 +42,7 @@ docker compose up -d
 | [docs/zh-CN/03-升级与维护.md](docs/zh-CN/03-升级与维护.md) | 升级、插件、密钥、备份 |
 | [docs/zh-CN/04-故障排查.md](docs/zh-CN/04-故障排查.md) | 常见问题 |
 | [docs/zh-CN/05-平台差异.md](docs/zh-CN/05-平台差异.md) | Linux / NAS / Docker Desktop 差异 |
+| [docs/zh-CN/06-救援模式.md](docs/zh-CN/06-救援模式.md) | 插件救援模式：自动回退 + 救生舱 |
 
 ---
 
@@ -50,7 +51,7 @@ docker compose up -d
 ```
 .
 ├── docker-compose.yml        # 部署配置（变量见 .env.example）
-├── Dockerfile                # 基础镜像：node:24 + git + socat + 预装 dsh seed
+├── Dockerfile                # 基础镜像：node:24 + git + socat + openssh-client + 预装 dsh seed
 ├── entrypoint.sh             # 容器入口：从 seed 复制 DSH → socat 转发 → 启动 web
 ├── .env.example              # 环境变量模板（复制为 .env 填写）
 ├── docs/
@@ -70,7 +71,7 @@ docker compose up -d
 宿主机 :3080 ──> 容器 socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 ```
 
-- 镜像构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），运行环境含 `node:24-slim` + git + ca-certificates + tzdata + socat
+- 镜像构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），运行环境含 `node:24-slim` + git + ca-certificates + tzdata + socat + openssh-client
 - 首次启动 `entrypoint.sh` 把 seed 复制到挂载卷 `/opt/dsh`（秒级、离线、版本固定），pnpm 随 seed 一起就位
 - 自定义构建：`docker build --build-arg DSH_VERSION=<版本> --build-arg APT_MIRROR=mirrors.aliyun.com -t dsh-docker:<版本> .`
 - 三个持久化卷：`./programs`（DSH 程序本体）、`./dsh`（DSH_HOME 用户数据）、`./workspace`（agent 工作区）
