@@ -17,7 +17,7 @@ This repo persists DSH in two parts:
 
 | Layer | Purpose | Trigger |
 |---|---|---|
-| Layer 0 · wrapped commands | `rescue plugin / dsh-upgrade` snapshot the current plugin tree before a change | run the wrapped command manually |
+| Layer 0 · wrapped commands | `rescue plugin` auto-snapshots the current plugin tree; `rescue dsh-upgrade` records the last-good main-program version | run the wrapped command manually |
 | Layer 1 · entrypoint auto-rollback | auto-rollback to the last known-good snapshot and retry after a failed boot | on by default (RESCUE_AUTO=on) |
 | Layer 2 · lifeboat | when rollback budget is exhausted, boot a clean minimal profile as a usable entry point | RESCUE=1 manually / automatic fallback |
 
