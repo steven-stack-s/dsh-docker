@@ -79,6 +79,16 @@ else
   rescue_live_differs_from() { echo 0; }
   rescue_restore() { :; }
   rescue_init_lifeboat() { :; }
+  incident_dir() { printf '%s/incidents' "$RESCUE_DIR"; }
+  evidence_dir() { printf '%s/evidence' "$RESCUE_DIR"; }
+  state_dir() { printf '%s/state' "$RESCUE_DIR"; }
+  rescue_incident_write() { :; }
+  rescue_incident_list() { :; }
+  rescue_incident_prune() { :; }
+  rescue_state_write_lastrun() { :; }
+  rescue_state_read_lastrun() { :; }
+  rescue_state_write_selfheal() { :; }
+  rescue_state_read_selfheal() { :; }
 fi
 
 PORT_INNER=3081
@@ -86,6 +96,19 @@ RESCUE_START_TIMEOUT="${RESCUE_START_TIMEOUT:-120}"
 RESCUE_AUTO="${RESCUE_AUTO:-on}"
 RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
+# rescue-diagnose 行为开关与限额（红线：绝不改 cordis.patch.yml / 会话 / 记忆 / 配置 / 凭据）
+RESCUE_SELFHEAL="${RESCUE_SELFHEAL:-on}"
+RESCUE_REMOVE_LIMIT="${RESCUE_REMOVE_LIMIT:-2}"
+RESCUE_ROLLBACK_LIMIT="${RESCUE_ROLLBACK_LIMIT:-2}"
+RESCUE_DIAGNOSE_EVIDENCE="${RESCUE_DIAGNOSE_EVIDENCE:-on}"
+RESCUE_INCIDENT_KEEP="${RESCUE_INCIDENT_KEEP:-20}"
+
+# 自愈 feature 可用性：diagnose.js 存在才算 enabled（正常镜像置于 /opt/dsh-rescue；仓库布局 fallback scripts/diagnose.js）
+RESCUE_DIAG=
+for _c in /opt/dsh-rescue/diagnose.js "$HERE/scripts/diagnose.js" "$HERE/diagnose.js"; do
+  [ -f "$_c" ] && { RESCUE_DIAG="$_c"; break; }
+done
+[ -n "$RESCUE_DIAG" ] || echo '[entrypoint] WARN diagnose.js missing; auto-diagnose/self-heal DISABLED'
 
 boot_lifeboat() {
   # $1 = 进入 lifeboat 的原因（缺省=显式 RESCUE=1）；用于 echo 与审计日志，区分用户手动进 vs 回滚失败兜底进
@@ -111,38 +134,204 @@ if [ ! -f "$probe" ]; then
   echo '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
   exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
 fi
+# ===== 归因自愈辅助（规范 §6；本环境仅静态校验，真机行为以宿主机 e2e 为准）=====
+rescue_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+attempt_evdir() {
+  ed="$(evidence_dir)/boot-$attempt-$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$ed" 2>/dev/null && printf '%s' "$ed"
+}
+# 启动 dsh 子进程。RESCUE_DIAGNOSE_EVIDENCE=on 时尽力把输出 tee 到证据目录（同时保留容器日志）；
+# 任何环节失败都回退为普通子进程（绝不让证据捕获阻塞或拖垮监督）。回填 $child、$EVLOG(=dsh.log,可空)。
+rescue_start_child() {
+  EVLOG=''; tee_pid=''
+  if [ "$RESCUE_DIAGNOSE_EVIDENCE" = on ]; then
+    ed="$(attempt_evdir)"
+    if [ -n "$ed" ]; then
+      fifo="$ed/dsh.fifo"
+      if mkfifo "$fifo" 2>/dev/null; then
+        EVLOG="$ed/dsh.log"
+        ( tee "$EVLOG" < "$fifo" ) & tee_pid=$!
+        # 读写方式打开 fifo，使 tee 读端与 dsh 写端 open 都不阻塞（去死锁）
+        exec 3<>"$fifo" 2>/dev/null || { rm -f "$fifo" 2>/dev/null || true; EVLOG=''; }
+      fi
+    fi
+  fi
+  if [ -n "$EVLOG" ]; then
+    ( exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS >&3 2>&1 ) &
+    child=$!
+  else
+    dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
+    child=$!
+  fi
+}
+rescue_close_ev() {
+  exec 3>&- 2>/dev/null || true
+  if [ -n "$tee_pid" ]; then kill "$tee_pid" 2>/dev/null || true; fi
+  tee_pid=''
+}
+# 诊断：返回 0 并回填 DIAG_JSON。仅当 diagnose 可用（RESCUE_DIAG）才调用。
+rescue_diagnose() {
+  ph="$1"; trg="$2"; evd="$3"
+  [ -n "$RESCUE_DIAG" ] || return 1
+  [ -n "$evd" ] || return 1
+  out="$(node "$RESCUE_DIAG" --phase "$ph" --evidence "$evd" --rescue-dir "$RESCUE_DIR" 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1
+  DIAG_JSON="$out"
+  return 0
+}
+# 写 incident（需 diagnose 产物 DIAG_JSON）。DIAGCAP=0 时 no-op。$1=resolve 词(空则按 journal 推断)。
+rescue_write_incident() {
+  [ "$DIAGCAP" = 1 ] || return 0
+  resolve="$1"; evref="$2"
+  [ -n "$DIAG_JSON" ] || return 0
+  df="$SELFHEAL_JOURNAL.diag.json"; printf '%s\n' "$DIAG_JSON" > "$df"
+  sh_out="$(node "$RESCUE_DIAG" --write-incident --diag-file "$df" --journal "$SELFHEAL_JOURNAL" --trigger "$SELFHEAL_TRIGGER" --evidence-ref "$evref" --resolve "$resolve" 2>/dev/null)"
+  [ -n "$sh_out" ] || return 1
+  id=$(rescue_incident_write "$sh_out")
+  SELFHEAL_INCIDENT="$id"
+  echo "[entrypoint] incident written: $id"
+}
+rescue_budget_read() {
+  bj="$(rescue_state_read_selfheal 2>/dev/null || true)"
+  SELFHEAL_REMOVES=0; SELFHEAL_ROLLBACKS=0
+  if [ -n "$bj" ]; then
+    _rm=$(printf '%s' "$bj" | sed -n 's/.*"removes":\([0-9]*\).*/\1/p'); _rb=$(printf '%s' "$bj" | sed -n 's/.*"rollbacks":\([0-9]*\).*/\1/p')
+    [ -n "$_rm" ] && SELFHEAL_REMOVES="$_rm"; [ -n "$_rb" ] && SELFHEAL_ROLLBACKS="$_rb"
+  fi
+}
+rescue_budget_write() {
+  rescue_state_write_selfheal "{\"removes\":$SELFHEAL_REMOVES,\"rollbacks\":$SELFHEAL_ROLLBACKS,\"updated\":\"$(rescue_ts)\"}" 2>/dev/null || true
+}
+rescue_journal_add() {
+  [ -n "$SELFHEAL_JOURNAL" ] || return 0
+  printf '%s|%s|%s|%s\n' "$1" "$2" "$(rescue_ts)" "$3" >> "$SELFHEAL_JOURNAL"
+}
+rescue_budget_check() {
+  kind="$1"
+  if [ "$kind" = remove ]; then [ "$SELFHEAL_REMOVES" -lt "$RESCUE_REMOVE_LIMIT" ]; return $?; fi
+  [ "$SELFHEAL_ROLLBACKS" -lt "$RESCUE_ROLLBACK_LIMIT" ]
+}
+# ---- 自愈执行器：按 recommendedHeal 分派。返回 0=已改变插件树（应重试 boot）；非0=未改变（走 report/exit）。----
+rescue_do_heal() {
+  heal="$1"; target="$2"
+  case "$heal" in
+    remove-plugin)
+      [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; remove-plugin -> report-only'; return 1; }
+      [ -n "$target" ] || { echo '[entrypoint] remove-plugin: no target -> report-only'; return 1; }
+      if ! rescue_budget_check remove; then echo '[entrypoint] remove budget exceeded -> report-only'; return 1; fi
+      REASON_SNAPSHOT="selfheal-remove $target" rescue_snapshot >/dev/null 2>&1 || rescue_log 'selfheal: scene snapshot skipped'
+      echo "[entrypoint] selfheal remove-plugin: $target"
+      if dsh plugin --profile "$RESCUE_PROFILE" remove "$target" >/dev/null 2>&1; then
+        SELFHEAL_REMOVES=$((SELFHEAL_REMOVES+1)); rescue_budget_write
+        rescue_journal_add remove "$target" ok; rescue_log "selfheal remove-plugin ok: $target"; return 0
+      fi
+      rescue_journal_add remove "$target" fail; rescue_log "selfheal remove-plugin FAILED: $target"; return 1
+      ;;
+    rollback)
+      [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; rollback -> report-only'; return 1; }
+      snap="$target"; [ -n "$snap" ] || snap="$newest_snap"
+      [ -n "$snap" ] || { echo '[entrypoint] rollback: no baseline -> report-only'; return 1; }
+      if ! rescue_budget_check rollback; then echo '[entrypoint] rollback budget exceeded -> report-only'; return 1; fi
+      REASON_SNAPSHOT="selfheal-rollback $snap" rescue_snapshot >/dev/null 2>&1 || true
+      echo "[entrypoint] selfheal rollback to $snap"
+      if rescue_restore "$snap"; then
+        SELFHEAL_ROLLBACKS=$((SELFHEAL_ROLLBACKS+1)); rescue_budget_write
+        rescue_journal_add rollback "$snap" ok; rescue_log "selfheal rollback ok: $snap"; return 0
+      fi
+      rescue_journal_add rollback "$snap" fail; rescue_log "selfheal rollback FAILED: $snap"; return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---- 状态初始化（归因自愈用；本文件由 entrypoint 监督循环 source，须兼容 set -u）----
+EVLOG=''; child=''; tee_pid=''; DIAG_JSON=''
+DIAGCAP=0; [ -n "$RESCUE_DIAG" ] && DIAGCAP=1
+SELFHEAL_JOURNAL=$(mktemp 2>/dev/null || printf '%s' /tmp/selfheal-journal)
+rm -f "$SELFHEAL_JOURNAL" "$SELFHEAL_JOURNAL.diag.json"
+SELFHEAL_TRIGGER='boot'; SELFHEAL_INCIDENT=''; evref=''
+SELFHEAL_REMOVES=0; SELFHEAL_ROLLBACKS=0
+rescue_budget_read
+
+# 最新快照（既有“回滚最新”兜底目标 + 基线参考）
+newest_snap=''
+[ -n "$(rescue_snapshot_list 2>/dev/null)" ] && newest_snap=$(rescue_snapshot_list 2>/dev/null | tail -n1 | xargs -r basename)
+
+# 上次运行 abnormalExit（运行期崩溃补判，规范 §6.2）：记录即可；自动处置交由报告人工复核（保守默认）
+lr=$(rescue_state_read_lastrun 2>/dev/null || true)
+if [ -n "$lr" ]; then
+  _ab=$(printf '%s' "$lr" | sed -n 's/.*"abnormalExit":\(true\|false\).*/\1/p')
+  if [ "$_ab" = true ]; then
+    echo '[entrypoint] last run abnormal exit recorded; see rescue report for runtime attribution'
+  fi
+fi
 while :; do
   attempt=$((attempt + 1))
   echo "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
-  dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
-  child=$!
-  probe=/opt/dsh-rescue/probe-ready.js
+  SELFHEAL_TRIGGER="boot-attempt-$attempt"
+  rescue_start_child
   if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
     echo "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
-    wait "$child"
-    exit $?
+    rescue_close_ev
+    rescue_state_write_lastrun "{\"phase\":\"healthy\",\"ts\":\"$(rescue_ts)\",\"pid\":\"$child\",\"abnormalExit\":false}" 2>/dev/null || true
+    rc=0
+    wait "$child" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      rescue_state_write_lastrun "{\"phase\":\"runtime-crash\",\"ts\":\"$(rescue_ts)\",\"exit\":\"$rc\",\"abnormalExit\":true}" 2>/dev/null || true
+      rescue_log "dsh crashed after healthy rc=$rc; exit for docker restart policy"
+    else
+      rescue_state_write_lastrun "{\"phase\":\"exited\",\"ts\":\"$(rescue_ts)\",\"exit\":0,\"abnormalExit\":false}" 2>/dev/null || true
+    fi
+    exit "$rc"
   fi
   echo "[entrypoint] dsh not ready within ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
   kill "$child" 2>/dev/null || true
   wait "$child" 2>/dev/null || true
-  if [ "$RESCUE_AUTO" = "on" ] && [ "$has_snap" = "1" ] && [ "$attempt" -lt "$max_attempt" ]; then
-    newest=$(rescue_snapshot_list 2>/dev/null | tail -n1 | xargs -r basename)
-    differs=0
-    if [ -n "$newest" ]; then differs=$(rescue_live_differs_from "$newest" 2>/dev/null || echo 0); fi
-    if [ -n "$newest" ] && [ "$differs" = "1" ]; then
-      echo "[entrypoint] rolling back plugin tree to $newest"
-      rescue_log "auto-rollback start -> $newest"
-      if rescue_restore "$newest"; then
-        rescue_log "auto-rollback done -> $newest"
-        continue
-      fi
-      echo '[entrypoint] rollback FAILED -> lifeboat'
-      rescue_log "auto-rollback FAILED ($newest)"
-      boot_lifeboat 'rollback FAILED'
+  rescue_close_ev
+  rescue_state_write_lastrun "{\"phase\":\"boot-fail\",\"ts\":\"$(rescue_ts)\",\"attempt\":\"$attempt\",\"abnormalExit\":false}" 2>/dev/null || true
+
+  # ---- 归因判定：有证据文本 -> diagnose；无诊断能力/无证据 -> 走既有“回滚最新快照”兜底 ----
+  evdir=''
+  if [ -n "$EVLOG" ] && [ -s "$EVLOG" ]; then evdir="$(dirname "$EVLOG")"; fi
+  DIAG_JSON=''; heal=''; target=''; diag_ok=0
+  if [ -n "$evdir" ] && rescue_diagnose boot probe-timeout "$evdir"; then
+    diag_ok=1
+    heal=$(printf '%s' "$DIAG_JSON" | sed -n 's/.*"recommendedHeal":"\([^"]*\)".*/\1/p')
+    target=$(printf '%s' "$DIAG_JSON" | sed -n 's/.*"recommendedTarget":"\([^"]*\)".*/\1/p')
+    echo "[entrypoint] diagnosis -> heal=$heal target=$target"
+  elif [ "$RESCUE_AUTO" = on ] && [ "$has_snap" = 1 ] && [ "$attempt" -lt "$max_attempt" ]; then
+    # 无证据/无 diagnose 时的既有兜底：live != 最新快照则回滚最新快照
+    ns="$newest_snap"
+    if [ -n "$ns" ]; then
+      dfr=$(rescue_live_differs_from "$ns" 2>/dev/null || echo 0)
+      if [ "$dfr" = 1 ]; then heal='rollback'; target="$ns"; echo "[entrypoint] no-evidence fallback: rollback to $ns"; fi
     fi
   fi
-  echo '[entrypoint] no rollback available/exhausted -> exit for docker restart policy'
-  rescue_log 'boot exhausted, no rollback available; exit for docker restart policy'
+
+  healed=0
+  if [ -n "$heal" ]; then
+    case "$heal" in
+      remove-plugin|rollback)
+        if rescue_do_heal "$heal" "$target"; then
+          healed=1
+          if [ "$attempt" -lt "$max_attempt" ]; then
+            rescue_write_incident "" "$evdir"
+            continue
+          fi
+        fi
+        ;;
+    esac
+  fi
+  # ---- 未自愈：写 incident(report-only) 后按既有语义 exit（docker restart 策略/手动 RESCUE=1 进 lifeboat）----
+  if [ "$healed" = 1 ]; then
+    echo '[entrypoint] self-heal applied but max_attempt reached; lifecycle exit for docker restart'
+  else
+    if [ -n "$diag_ok" ] && [ "$diag_ok" = 1 ]; then
+      echo '[entrypoint] no recoverable self-heal; writing report-only incident'
+      rescue_write_incident report-only "$evdir"
+    fi
+    echo '[entrypoint] boot not recoverable -> exit for docker restart policy'
+  fi
+  rescue_log 'boot exhausted; exit for docker restart policy'
   exit 1
 done
-
