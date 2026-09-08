@@ -4,6 +4,10 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.3-dsh0.1.2-rc.1] - 2026-09-09
+
+### Changed
+- **方案 A 重构：entrypoint 拆分**——`entrypoint.sh` 由 386 行减为 148 行薄壳（只承担 PID1 生命周期与依赖准备）；归因自愈编排（证据捕获 / diagnose / incident / budget / 自愈执行器）与监督主循环抽到新 `scripts/rescue-supervise.sh`，由 entrypoint source 后调 `rescue_supervise()`。行为零漂移（三重逐字等价 + source 契约测试 + 真机回归），Dockerfile 同步 COPY。
 ## [v0.3.2-dsh0.1.2-rc.1] - 2026-09-09
 
 ### Added
