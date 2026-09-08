@@ -1,8 +1,0 @@
-fix(rescue): wire runtime-crash incident + doctor health (close review-spec gaps)
-
-- diagnose.js: tolerate absent evidence dir so runtime diagnosis works
-  from changeContext alone (test-diagnose case F red->green)
-- entrypoint: on last-run abnormalExit write a phase=runtime report-only
-  incident (spec 6.2 / doc 4b) instead of only echoing a notice
-- rescue doctor: report evidence/state/incident dir health + last-run status
-  (spec 8), test-rescue-cmds doctor case red->green; sync doc 06 row
