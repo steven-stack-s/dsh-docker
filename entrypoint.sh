@@ -20,7 +20,8 @@ if ! command -v dsh >/dev/null 2>&1; then
     elog "[entrypoint]   从镜像内 seed (/opt/dsh-seed) 复制到 /opt/dsh"
     mkdir -p /opt/dsh
     cp -a /opt/dsh-seed/. /opt/dsh/
-    rm -rf /opt/dsh-seed   # 复制完清理：容器内不留重复副本（镜像层 seed 不变；回滚需 down+up 新容器）
+    # 保留 /opt/dsh-seed：它位于镜像只读层，rm 无法释放镜像空间，且保留可让 rescue dsh-reinstall
+    # 在主程序(/opt/dsh 卷)损坏且离线时从 seed 恢复（镜像版本）。重建容器也会重新可见。
   else
     # 兜底：seed 不存在（极少见，如手动精简镜像）时联网安装
     elog "[entrypoint]   seed 不存在，走 npm 在线安装"
@@ -40,7 +41,6 @@ if ! command -v pnpm >/dev/null 2>&1; then
     # dsh 段已复制过 seed 的话 pnpm 应已就位；这里兜底单独复制
     mkdir -p /opt/dsh
     cp -a /opt/dsh-seed/. /opt/dsh/
-    rm -rf /opt/dsh-seed   # 兜底复制后同样清理
   elif [ -n "$NPM_REGISTRY" ]; then
     npm install -g pnpm --registry="$NPM_REGISTRY"
   else
@@ -77,7 +77,9 @@ if [ -f /opt/dsh-rescue/librescue.sh ]; then
   . /opt/dsh-rescue/librescue.sh
 else
   elog '[entrypoint] WARN librescue.sh not found; auto-rollback DISABLED'
+  RESCUE_DIR="${DSH_HOME:-/data/dsh}/.rescue"
   rescue_log() { :; }
+  rescue_dir() { printf '%s' "$RESCUE_DIR"; }
   rescue_snapshot_list() { :; }
   rescue_live_differs_from() { echo 0; }
   rescue_restore() { :; }
@@ -118,6 +120,15 @@ LOGTAG=
 for _c in /opt/dsh-rescue/logtag.js "$HERE/scripts/logtag.js" "$HERE/logtag.js"; do
   [ -f "$_c" ] && { LOGTAG="$_c"; break; }
 done
+
+# 证据文件轮转器（logtee.js）可用性：tee 替身 + 按 RESCUE_EVIDENCE_MAX 轮转，防 healthy 后活动 dsh.log 无限增长；
+# 缺失时降级为原 tee（无轮转，仅在有 logtag 的 tee 证据链时用到）。
+LOGTEE=
+for _c in /opt/dsh-rescue/logtee.js "$HERE/scripts/logtee.js" "$HERE/logtee.js"; do
+  [ -f "$_c" ] && { LOGTEE="$_c"; break; }
+done
+# 证据文件单文件轮转上限（字节；healthy 后活动 dsh.log 超限即轮转保留最近一段）
+RESCUE_EVIDENCE_MAX="${RESCUE_EVIDENCE_MAX:-20971520}"
 
 
 boot_lifeboat() {

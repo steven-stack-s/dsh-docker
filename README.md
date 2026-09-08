@@ -88,6 +88,8 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 
 Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh<dsh-version>` (e.g. `v0.3.0-dsh0.1.2-rc.1`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
 
+> To run a **pinned** dsh version, set `DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<project-version>-dsh<dsh-version>` in `.env` (its seed matches that exact dsh version). The default `:latest` is rebuilt on every tag push and tracks the newest published version — it is not a fixed build.
+
 ## 📄 License
 
 [MIT](LICENSE)
