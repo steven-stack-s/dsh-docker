@@ -82,8 +82,11 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 - `DEEPSEEK_API_KEY` lives only in `.env` (ignored by `.gitignore`) — never commit it.
 - Do not expose port `3080` directly to the public internet; for remote access, add authentication + a reverse proxy (see [docs/en/02-authentication-remote-access.md](docs/en/02-authentication-remote-access.md)).
 - Back up the whole deployment directory regularly.
-
 ---
+
+## 🏷️ Releases
+
+Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh<dsh-version>` (e.g. `v0.3.0-dsh0.1.2-rc.1`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
 
 ## 📄 License
 
