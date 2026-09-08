@@ -4,6 +4,10 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.2-dsh0.1.2-rc.1] - 2026-09-09
+
+### Added
+- **日志逐行加时间戳**：entrypoint 消息经新 `elog()` 加前缀 `[YYYY-MM-DDTHH:MM:SS±HHMM]`（与 rescue.log 同格式）；dsh 应用输出经新 `scripts/logtag.js` 行过滤器（fifo → logtag | tee）同样逐行带时间戳，docker logs 与 evidence/dsh.log 同步生效；logtag 缺失时降级为原 tee 直连。entrypoint.sh 修正为可执行模式。
 ## [v0.3.1-dsh0.1.2-rc.1] - 2026-09-08
 
 ### Fixed
