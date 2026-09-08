@@ -1,0 +1,15 @@
+feat(entrypoint): timestamp every log line (entrypoint elog + dsh output via logtag)
+
+- elog(): entrypoint messages now prefixed [YYYY-MM-DDTHH:MM:SS+HHMM]
+  (same format as rescue.log); all 31 user-facing [entrypoint] echoes converted.
+- scripts/logtag.js: line-timestamp filter inserted between dsh fifo and tee
+  (fifo -> logtag | tee), so dsh app output reaches docker logs AND
+  evidence/dsh.log with per-line timestamps. Graceful fallback to plain tee
+  when logtag.js is absent; boot-fail path unchanged.
+- Dockerfile: COPY logtag.js into /opt/dsh-rescue.
+- entrypoint.sh mode 100644 -> 100755 (must be executable after docker cp).
+
+Verified: sh -n + node --check + all 5 unit suites PASS; full-chain fifo
+-> logtag | tee experiment shows per-line timestamps on stdout + evidence;
+on host container (docker cp) all docker logs lines now carry [ts], zero
+bare lines after healthy; logtag + tee procs alive.
