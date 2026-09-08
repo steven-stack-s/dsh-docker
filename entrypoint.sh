@@ -147,6 +147,7 @@ rescue_start_child() {
   if [ "$RESCUE_DIAGNOSE_EVIDENCE" = on ]; then
     ed="$(attempt_evdir)"
     if [ -n "$ed" ]; then
+      rescue_evidence_prune
       fifo="$ed/dsh.fifo"
       if mkfifo "$fifo" 2>/dev/null; then
         EVLOG="$ed/dsh.log"
@@ -168,6 +169,17 @@ rescue_close_ev() {
   exec 3>&- 2>/dev/null || true
   if [ -n "$tee_pid" ]; then kill "$tee_pid" 2>/dev/null || true; fi
   tee_pid=''
+}
+# evidence 修剪：dsh 日志经 tee 持续镜像到证据目录，按 boot-* 保留最近 RESCUE_KEEP 份，
+# 防长期运行的 dsh.log 镜像无限累积（healthy 后 tee 不再被提前杀死）。
+rescue_evidence_prune() {
+  n=$(ls -1d "$(evidence_dir)"/boot-* 2>/dev/null | wc -l | tr -d ' ')
+  while [ "$n" -gt "$RESCUE_KEEP" ]; do
+    oldest=$(ls -1d "$(evidence_dir)"/boot-* 2>/dev/null | sort | head -n1)
+    [ -n "$oldest" ] || break
+    rm -rf "$oldest" 2>/dev/null || true
+    n=$((n-1))
+  done
 }
 # 诊断：返回 0 并回填 DIAG_JSON。仅当 diagnose 可用（RESCUE_DIAG）才调用。
 rescue_diagnose() {
@@ -289,7 +301,11 @@ while :; do
   rescue_start_child
   if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
     echo "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
-    rescue_close_ev
+    # 修复(丢日志根因)：healthy 后不能杀 tee——tee 是 fifo 唯一读端，杀它会让 dsh
+    # 后续 stdout 输出无读者而全部丢弃（v0.3.0 tee 证据捕获引入：docker logs 在
+    # healthy 之后不再有 dsh 日志）。只释放 entrypoint 自己的写端，tee 继续把 dsh
+    # 输出转发到容器 stdout(即 docker logs)与 evidence；dsh 退出(写端 EOF)后 tee 自然结束。
+    exec 3>&- 2>/dev/null || true
     rescue_state_write_lastrun "{\"phase\":\"healthy\",\"ts\":\"$(rescue_ts)\",\"pid\":\"$child\",\"abnormalExit\":false}" 2>/dev/null || true
     rc=0
     wait "$child" || rc=$?
