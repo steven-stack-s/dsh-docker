@@ -10,29 +10,32 @@ set -e
 #   - 无需重新构建/拉取镜像
 # ============================================================
 
+# 带时间戳日志（格式与 rescue.log 一致 %Y-%m-%dT%H:%M:%S%z）：docker logs 人读时间线
+elog() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
+
 if ! command -v dsh >/dev/null 2>&1; then
-  echo "[entrypoint] 首次启动：准备 @deepseek-ai/dsh 到挂载卷 /opt/dsh ..."
+  elog "[entrypoint] 首次启动：准备 @deepseek-ai/dsh 到挂载卷 /opt/dsh ..."
   if [ -x /opt/dsh-seed/bin/dsh ]; then
     # 从镜像内 seed 复制：离线、版本固定、秒级完成
-    echo "[entrypoint]   从镜像内 seed (/opt/dsh-seed) 复制到 /opt/dsh"
+    elog "[entrypoint]   从镜像内 seed (/opt/dsh-seed) 复制到 /opt/dsh"
     mkdir -p /opt/dsh
     cp -a /opt/dsh-seed/. /opt/dsh/
     rm -rf /opt/dsh-seed   # 复制完清理：容器内不留重复副本（镜像层 seed 不变；回滚需 down+up 新容器）
   else
     # 兜底：seed 不存在（极少见，如手动精简镜像）时联网安装
-    echo "[entrypoint]   seed 不存在，走 npm 在线安装"
+    elog "[entrypoint]   seed 不存在，走 npm 在线安装"
     if [ -n "$NPM_REGISTRY" ]; then
       npm install -g @deepseek-ai/dsh --registry="$NPM_REGISTRY"
     else
       npm install -g @deepseek-ai/dsh
     fi
   fi
-  echo "[entrypoint] DSH 已就绪: $(command -v dsh)"
+  elog "[entrypoint] DSH 已就绪: $(command -v dsh)"
 fi
 
 # pnpm：dsh plugin 命令（插件管理）转发到 pnpm 执行，必须可用
 if ! command -v pnpm >/dev/null 2>&1; then
-  echo "[entrypoint] 准备 pnpm（插件管理需要）..."
+  elog "[entrypoint] 准备 pnpm（插件管理需要）..."
   if [ -x /opt/dsh-seed/bin/pnpm ]; then
     # dsh 段已复制过 seed 的话 pnpm 应已就位；这里兜底单独复制
     mkdir -p /opt/dsh
@@ -49,20 +52,20 @@ fi
 # 端口分工：dsh 内部监听 127.0.0.1:3081；socat 把外部 0.0.0.0:3080 转发到 3081。
 # （socat 不能听 3080 再让 dsh 也听 3080：0.0.0.0 会占用 127.0.0.1，必然 EADDRINUSE）
 if command -v socat >/dev/null 2>&1; then
-  echo "[entrypoint] 启动 socat 转发: 0.0.0.0:3080 -> 127.0.0.1:3081"
+  elog "[entrypoint] 启动 socat 转发: 0.0.0.0:3080 -> 127.0.0.1:3081"
   # 上游 forever + intervall=1：socat 先于 dsh web 启动，dsh 监听 3081 前
   # 若有连接打到 3080，socat 会每秒重试直到 dsh 就绪，而不是抛 Connection refused
   socat TCP-LISTEN:3080,fork,reuseaddr TCP:127.0.0.1:3081,forever,intervall=1 &
 fi
 
-echo "[entrypoint] 启动 dsh web (内部 127.0.0.1:3081)"
+elog "[entrypoint] 启动 dsh web (内部 127.0.0.1:3081)"
 # --no-open：容器内无浏览器，禁用 dsh 自动打开浏览器
 # --trusted-host：dsh 0.1.2 的 /api 通道仅信任 loopback 或白名单 Host；
 #   浏览器经局域网 IP / 隧道域名访问时被 403 拒绝（页面能开但连接异常）。
 #   通过 DSH_TRUSTED_HOSTS 传入（逗号分隔，如 "192.168.1.5:3080,app.xx.com"）逐一加白。
 TRUSTED_ARGS=""
 if [ -n "$DSH_TRUSTED_HOSTS" ]; then
-  echo "[entrypoint] 白名单 Host: $DSH_TRUSTED_HOSTS"
+  elog "[entrypoint] 白名单 Host: $DSH_TRUSTED_HOSTS"
   for h in $(echo "$DSH_TRUSTED_HOSTS" | tr ',' ' '); do
     TRUSTED_ARGS="$TRUSTED_ARGS --trusted-host $h"
   done
@@ -73,7 +76,7 @@ fi
 if [ -f /opt/dsh-rescue/librescue.sh ]; then
   . /opt/dsh-rescue/librescue.sh
 else
-  echo '[entrypoint] WARN librescue.sh not found; auto-rollback DISABLED'
+  elog '[entrypoint] WARN librescue.sh not found; auto-rollback DISABLED'
   rescue_log() { :; }
   rescue_snapshot_list() { :; }
   rescue_live_differs_from() { echo 0; }
@@ -108,12 +111,19 @@ RESCUE_DIAG=
 for _c in /opt/dsh-rescue/diagnose.js "$HERE/scripts/diagnose.js" "$HERE/diagnose.js"; do
   [ -f "$_c" ] && { RESCUE_DIAG="$_c"; break; }
 done
-[ -n "$RESCUE_DIAG" ] || echo '[entrypoint] WARN diagnose.js missing; auto-diagnose/self-heal DISABLED'
+[ -n "$RESCUE_DIAG" ] || elog '[entrypoint] WARN diagnose.js missing; auto-diagnose/self-heal DISABLED'
+
+# 行时间戳过滤器（logtag.js）可用性：给 dsh 输出每行加时间戳；缺失时降级为无时间戳 tee 直连
+LOGTAG=
+for _c in /opt/dsh-rescue/logtag.js "$HERE/scripts/logtag.js" "$HERE/logtag.js"; do
+  [ -f "$_c" ] && { LOGTAG="$_c"; break; }
+done
+
 
 boot_lifeboat() {
   # $1 = 进入 lifeboat 的原因（缺省=显式 RESCUE=1）；用于 echo 与审计日志，区分用户手动进 vs 回滚失败兜底进
   reason="${1:-rescue requested (RESCUE=1)}"
-  echo "[entrypoint] booting clean lifeboat profile ($reason); no third-party plugins; data preserved"
+  elog "[entrypoint] booting clean lifeboat profile ($reason); no third-party plugins; data preserved"
   rescue_log "lifeboat enter: $reason"
   rescue_init_lifeboat
   exec dsh --profile lifeboat --port $PORT_INNER --no-open $TRUSTED_ARGS
@@ -131,7 +141,7 @@ probe=/opt/dsh-rescue/probe-ready.js
 # [entrypoint] 控制器裁决：probe-ready.js 缺失（/opt/dsh-rescue 整体缺失/精简镜像/手工替换）
 # 时无法监督 -> 降级为原始前台 exec，保证慢启动的健康 dsh 不被误杀。
 if [ ! -f "$probe" ]; then
-  echo '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
+  elog '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
   exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
 fi
 # ===== 归因自愈辅助（规范 §6；本环境仅静态校验，真机行为以宿主机 e2e 为准）=====
@@ -151,8 +161,14 @@ rescue_start_child() {
       fifo="$ed/dsh.fifo"
       if mkfifo "$fifo" 2>/dev/null; then
         EVLOG="$ed/dsh.log"
-        ( tee "$EVLOG" < "$fifo" ) & tee_pid=$!
-        # 读写方式打开 fifo，使 tee 读端与 dsh 写端 open 都不阻塞（去死锁）
+        if [ -n "$LOGTAG" ]; then
+          # 逐行加时间戳后再 tee：docker logs 与 evidence/dsh.log 每行都带时间（格式同 elog）
+          ( exec node "$LOGTAG" < "$fifo" 2>/dev/null ) | tee "$EVLOG" &
+          tee_pid=$!
+        else
+          ( tee "$EVLOG" < "$fifo" ) & tee_pid=$!
+        fi
+        # 读写方式打开 fifo，使读端(logtag|tee)与 dsh 写端 open 都不阻塞（去死锁）
         exec 3<>"$fifo" 2>/dev/null || { rm -f "$fifo" 2>/dev/null || true; EVLOG=''; }
       fi
     fi
@@ -201,7 +217,7 @@ rescue_write_incident() {
   [ -n "$sh_out" ] || return 1
   id=$(rescue_incident_write "$sh_out")
   SELFHEAL_INCIDENT="$id"
-  echo "[entrypoint] incident written: $id"
+  elog "[entrypoint] incident written: $id"
 }
 # 运行期崩溃 incident（规范 §6.2 / 文档 §4b）：下次启动读到上次 abnormalExit 时，写一条 phase=runtime 的
 # report-only incident（保守：运行期崩溃仅报告归因、不自动摘/回退，供 rescue report 人工复核）。无 diagnose 则 no-op。
@@ -211,7 +227,7 @@ rescue_write_runtime_incident() {
   [ -n "$body" ] || return 1
   id=$(rescue_incident_write "$body")
   SELFHEAL_INCIDENT="$id"
-  echo "[entrypoint] runtime incident written: $id"
+  elog "[entrypoint] runtime incident written: $id"
   rescue_log "runtime incident written $id (abnormalExit)"
   return 0
 }
@@ -240,13 +256,13 @@ rescue_do_heal() {
   heal="$1"; target="$2"
   case "$heal" in
     remove-plugin)
-      [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; remove-plugin -> report-only'; return 1; }
-      [ -n "$target" ] || { echo '[entrypoint] remove-plugin: no target -> report-only'; return 1; }
-      if ! rescue_budget_check remove; then echo '[entrypoint] remove budget exceeded -> report-only'; return 1; fi
+      [ "$RESCUE_SELFHEAL" = on ] || { elog '[entrypoint] RESCUE_SELFHEAL=off; remove-plugin -> report-only'; return 1; }
+      [ -n "$target" ] || { elog '[entrypoint] remove-plugin: no target -> report-only'; return 1; }
+      if ! rescue_budget_check remove; then elog '[entrypoint] remove budget exceeded -> report-only'; return 1; fi
       # 捕获目标后再拍场景快照（rescue_snapshot 会覆盖全局 $snap/$target 等）
       RM_PKG="$target"
       REASON_SNAPSHOT="selfheal-remove $RM_PKG" rescue_snapshot >/dev/null 2>&1 || rescue_log 'selfheal: scene snapshot skipped'
-      echo "[entrypoint] selfheal remove-plugin: $RM_PKG"
+      elog "[entrypoint] selfheal remove-plugin: $RM_PKG"
       if dsh plugin --profile "$RESCUE_PROFILE" remove "$RM_PKG" >/dev/null 2>&1; then
         SELFHEAL_REMOVES=$((SELFHEAL_REMOVES+1)); rescue_budget_write
         rescue_journal_add remove "$RM_PKG" ok; rescue_log "selfheal remove-plugin ok: $RM_PKG"; return 0
@@ -254,14 +270,14 @@ rescue_do_heal() {
       rescue_journal_add remove "$RM_PKG" fail; rescue_log "selfheal remove-plugin FAILED: $RM_PKG"; return 1
       ;;
     rollback)
-      [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; rollback -> report-only'; return 1; }
+      [ "$RESCUE_SELFHEAL" = on ] || { elog '[entrypoint] RESCUE_SELFHEAL=off; rollback -> report-only'; return 1; }
       # 目标基线快照名需在本函数内独立持有：rescue_snapshot / rescue_restore 均会覆盖全局 $snap，
       # 若用 $snap 作目标，场景快照一建即被改写，回滚会错误地“恢复”到刚建的坏现场。
       RB_TARGET="$target"; [ -n "$RB_TARGET" ] || RB_TARGET="$newest_snap"
-      [ -n "$RB_TARGET" ] || { echo '[entrypoint] rollback: no baseline -> report-only'; return 1; }
-      if ! rescue_budget_check rollback; then echo '[entrypoint] rollback budget exceeded -> report-only'; return 1; fi
+      [ -n "$RB_TARGET" ] || { elog '[entrypoint] rollback: no baseline -> report-only'; return 1; }
+      if ! rescue_budget_check rollback; then elog '[entrypoint] rollback budget exceeded -> report-only'; return 1; fi
       REASON_SNAPSHOT="selfheal-rollback $RB_TARGET" rescue_snapshot >/dev/null 2>&1 || true
-      echo "[entrypoint] selfheal rollback to $RB_TARGET"
+      elog "[entrypoint] selfheal rollback to $RB_TARGET"
       if rescue_restore "$RB_TARGET"; then
         SELFHEAL_ROLLBACKS=$((SELFHEAL_ROLLBACKS+1)); rescue_budget_write
         rescue_journal_add rollback "$RB_TARGET" ok; rescue_log "selfheal rollback ok: $RB_TARGET"; return 0
@@ -290,17 +306,17 @@ lr=$(rescue_state_read_lastrun 2>/dev/null || true)
 if [ -n "$lr" ]; then
   _ab=$(printf '%s' "$lr" | sed -n 's/.*"abnormalExit":\(true\|false\).*/\1/p')
   if [ "$_ab" = true ]; then
-    echo '[entrypoint] last run abnormal exit recorded; writing runtime incident for rescue report review'
+    elog '[entrypoint] last run abnormal exit recorded; writing runtime incident for rescue report review'
     rescue_write_runtime_incident
   fi
 fi
 while :; do
   attempt=$((attempt + 1))
-  echo "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
+  elog "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
   SELFHEAL_TRIGGER="boot-attempt-$attempt"
   rescue_start_child
   if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
-    echo "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
+    elog "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
     # 修复(丢日志根因)：healthy 后不能杀 tee——tee 是 fifo 唯一读端，杀它会让 dsh
     # 后续 stdout 输出无读者而全部丢弃（v0.3.0 tee 证据捕获引入：docker logs 在
     # healthy 之后不再有 dsh 日志）。只释放 entrypoint 自己的写端，tee 继续把 dsh
@@ -317,7 +333,7 @@ while :; do
     fi
     exit "$rc"
   fi
-  echo "[entrypoint] dsh not ready within ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
+  elog "[entrypoint] dsh not ready within ${RESCUE_START_TIMEOUT}s (attempt $attempt)"
   kill "$child" 2>/dev/null || true
   wait "$child" 2>/dev/null || true
   rescue_close_ev
@@ -331,13 +347,13 @@ while :; do
     diag_ok=1
     heal=$(printf '%s' "$DIAG_JSON" | sed -n 's/.*"recommendedHeal":"\([^"]*\)".*/\1/p')
     target=$(printf '%s' "$DIAG_JSON" | sed -n 's/.*"recommendedTarget":"\([^"]*\)".*/\1/p')
-    echo "[entrypoint] diagnosis -> heal=$heal target=$target"
+    elog "[entrypoint] diagnosis -> heal=$heal target=$target"
   elif [ "$RESCUE_AUTO" = on ] && [ "$has_snap" = 1 ] && [ "$attempt" -lt "$max_attempt" ]; then
     # 无证据/无 diagnose 时的既有兜底：live != 最新快照则回滚最新快照
     ns="$newest_snap"
     if [ -n "$ns" ]; then
       dfr=$(rescue_live_differs_from "$ns" 2>/dev/null || echo 0)
-      if [ "$dfr" = 1 ]; then heal='rollback'; target="$ns"; echo "[entrypoint] no-evidence fallback: rollback to $ns"; fi
+      if [ "$dfr" = 1 ]; then heal='rollback'; target="$ns"; elog "[entrypoint] no-evidence fallback: rollback to $ns"; fi
     fi
   fi
 
@@ -357,13 +373,13 @@ while :; do
   fi
   # ---- 未自愈：写 incident(report-only) 后按既有语义 exit（docker restart 策略/手动 RESCUE=1 进 lifeboat）----
   if [ "$healed" = 1 ]; then
-    echo '[entrypoint] self-heal applied but max_attempt reached; lifecycle exit for docker restart'
+    elog '[entrypoint] self-heal applied but max_attempt reached; lifecycle exit for docker restart'
   else
     if [ -n "$diag_ok" ] && [ "$diag_ok" = 1 ]; then
-      echo '[entrypoint] no recoverable self-heal; writing report-only incident'
+      elog '[entrypoint] no recoverable self-heal; writing report-only incident'
       rescue_write_incident report-only "$evdir"
     fi
-    echo '[entrypoint] boot not recoverable -> exit for docker restart policy'
+    elog '[entrypoint] boot not recoverable -> exit for docker restart policy'
   fi
   rescue_log 'boot exhausted; exit for docker restart policy'
   exit 1
