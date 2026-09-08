@@ -97,13 +97,15 @@ function buildOutcome({ phase, symptom, evid, ctx, offender, cat, conf, heal, ta
 function diagnose(opts) {
   const phase = opts.phase || 'boot';
   const evidDir = opts.evidence;
-  const out = readFileOr(path.join(evidDir, 'dsh.stdout.log'));
-  const err = readFileOr(path.join(evidDir, 'dsh.stderr.log'));
-  const merged = readFileOr(path.join(evidDir, 'dsh.log'));
+  // 证据目录可缺失（如运行期崩溃仅靠 changeContext 归因，无该轮 boot evidence）：缺失则视为空文本
+  const eDir = evidDir || '';
+  const out = readFileOr(path.join(eDir, 'dsh.stdout.log'));
+  const err = readFileOr(path.join(eDir, 'dsh.stderr.log'));
+  const merged = readFileOr(path.join(eDir, 'dsh.log'));
   const text = (out + '\n' + err + '\n' + merged);
   const ctx = buildChangeContext(opts.rescueDir);
   const offender = extractPluginName(text);
-  const nonPlugin = NON_PLUGIN_PATTERNS.find((p) => p.re.test(text));
+  const nonPlugin = NON_PLUGIN_PATTERNS.find((pp) => pp.re.test(text));
   let r;
   if (nonPlugin && !offender) {
     r = buildOutcome({ phase, symptom: phase === 'boot' ? 'never-listening' : 'healthy-then-crash', evid: text, ctx,

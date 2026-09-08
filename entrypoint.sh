@@ -191,6 +191,18 @@ rescue_write_incident() {
   SELFHEAL_INCIDENT="$id"
   echo "[entrypoint] incident written: $id"
 }
+# 运行期崩溃 incident（规范 §6.2 / 文档 §4b）：下次启动读到上次 abnormalExit 时，写一条 phase=runtime 的
+# report-only incident（保守：运行期崩溃仅报告归因、不自动摘/回退，供 rescue report 人工复核）。无 diagnose 则 no-op。
+rescue_write_runtime_incident() {
+  [ -n "$RESCUE_DIAG" ] || return 0
+  body="$(node "$RESCUE_DIAG" --phase runtime --rescue-dir "$RESCUE_DIR" --write-incident --trigger child-exit --resolve report-only 2>/dev/null)" || return 1
+  [ -n "$body" ] || return 1
+  id=$(rescue_incident_write "$body")
+  SELFHEAL_INCIDENT="$id"
+  echo "[entrypoint] runtime incident written: $id"
+  rescue_log "runtime incident written $id (abnormalExit)"
+  return 0
+}
 rescue_budget_read() {
   bj="$(rescue_state_read_selfheal 2>/dev/null || true)"
   SELFHEAL_REMOVES=0; SELFHEAL_ROLLBACKS=0
@@ -266,7 +278,8 @@ lr=$(rescue_state_read_lastrun 2>/dev/null || true)
 if [ -n "$lr" ]; then
   _ab=$(printf '%s' "$lr" | sed -n 's/.*"abnormalExit":\(true\|false\).*/\1/p')
   if [ "$_ab" = true ]; then
-    echo '[entrypoint] last run abnormal exit recorded; see rescue report for runtime attribution'
+    echo '[entrypoint] last run abnormal exit recorded; writing runtime incident for rescue report review'
+    rescue_write_runtime_incident
   fi
 fi
 while :; do
