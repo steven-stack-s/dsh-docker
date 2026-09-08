@@ -95,15 +95,30 @@ case "$cmd" in
     echo 'upgraded; restart container: docker restart dsh'
     ;;
   dsh-reinstall)
-    # 主程序 seed 已在首启 rm -rf，无法容器内重放镜像 seed；
-    # 可靠恢复 = 按 last-good 版本容器内重装（覆盖 /opt/dsh）。
-    # 若连 npm 源都不可达，则只能重建含 seed 的镜像容器（任务 6 文档说明）。
+    # 优先：按 last-good 版本容器内 npm 重装（覆盖 /opt/dsh，联网）。
+    # 离线兜底：npm 源不可达且镜像 seed 仍在（/opt/dsh-seed，entrypoint 已不再 rm）时，
+    # 从 seed 覆盖 /opt/dsh（降级到镜像构建时锁定的 dsh 版本）。
     vf="$RESCUE_DIR/dsh-version-last-good.txt"
     [ -f "$vf" ] || { echo "no recorded version: $vf"; exit 1; }
     v=$(cat "$vf")
     rescue_log "dsh-reinstall to $v"
-    if [ -n "${NPM_REGISTRY:-}" ]; then npm install -g "@deepseek-ai/dsh@$v" --registry="$NPM_REGISTRY"; else npm install -g "@deepseek-ai/dsh@$v"; fi
-    echo 'reinstalled; restart container: docker restart dsh'
+    if [ -n "${NPM_REGISTRY:-}" ]; then
+      npm install -g "@deepseek-ai/dsh@$v" --registry="$NPM_REGISTRY" >/dev/null 2>&1
+    else
+      npm install -g "@deepseek-ai/dsh@$v" >/dev/null 2>&1
+    fi
+    if command -v dsh >/dev/null 2>&1; then
+      echo 'reinstalled; restart container: docker restart dsh'
+    elif [ -x /opt/dsh-seed/bin/dsh ]; then
+      rescue_log "npm reinstall offline unavailable; restore from image seed"
+      echo 'npm 源不可达（离线）或重装失败，从镜像 seed 恢复（版本=镜像锁定版）：'
+      mkdir -p /opt/dsh
+      cp -a /opt/dsh-seed/. /opt/dsh/
+      echo 'restored from seed; restart container: docker restart dsh'
+    else
+      echo 'ERROR: reinstall failed and no seed; rebuild the image container (seed-less image)'
+      exit 1;
+    fi
     ;;
   lifeboat)
     echo 'set RESCUE=1 in .env then: docker compose up -d  (boots clean lifeboat)'

@@ -32,9 +32,16 @@ rescue_start_child() {
       fifo="$ed/dsh.fifo"
       if mkfifo "$fifo" 2>/dev/null; then
         EVLOG="$ed/dsh.log"
-        if [ -n "$LOGTAG" ]; then
-          # 逐行加时间戳后再 tee：docker logs 与 evidence/dsh.log 每行都带时间（格式同 elog）
+        # 证据双写用 logtee（tee 替身，按 RESCUE_EVIDENCE_MAX 轮转防 healthy 后 dsh.log 无限增长）。
+        # 有 logtag 先逐行加时间戳（格式同 elog）；logtee/tee 缺失时逐级回退（保容器日志）。
+        if [ -n "$LOGTAG" ] && [ -n "$LOGTEE" ]; then
+          ( exec node "$LOGTAG" < "$fifo" 2>/dev/null ) | node "$LOGTEE" "$EVLOG" &
+          tee_pid=$!
+        elif [ -n "$LOGTAG" ]; then
           ( exec node "$LOGTAG" < "$fifo" 2>/dev/null ) | tee "$EVLOG" &
+          tee_pid=$!
+        elif [ -n "$LOGTEE" ]; then
+          ( exec node "$LOGTEE" "$EVLOG" < "$fifo" 2>/dev/null ) &
           tee_pid=$!
         else
           ( tee "$EVLOG" < "$fifo" ) & tee_pid=$!
@@ -138,7 +145,27 @@ rescue_do_heal() {
         SELFHEAL_REMOVES=$((SELFHEAL_REMOVES+1)); rescue_budget_write
         rescue_journal_add remove "$RM_PKG" ok; rescue_log "selfheal remove-plugin ok: $RM_PKG"; return 0
       fi
-      rescue_journal_add remove "$RM_PKG" fail; rescue_log "selfheal remove-plugin FAILED: $RM_PKG"; return 1
+      # remove 失败（可能为 bundles 型条目：remove 只清 dependencies，bundles 未清则仍会拉坏）：
+      # 同一 attempt 内升级为 rollback，回退到「场景快照之前」最近的好快照（场景快照此时已是 newest）。
+      # 无更早快照或 rollback 预算不足时不升级，保持 report-only（不误改树）。
+      rescue_journal_add remove "$RM_PKG" fail; rescue_log "selfheal remove-plugin FAILED, escalate: $RM_PKG"
+      _prev=''
+      _pl=$(rescue_snapshot_list)
+      if [ "$(printf '%s\n' "$_pl" | sed '/^$/d' | wc -l)" -ge 2 ]; then
+        _prev=$(printf '%s\n' "$_pl" | sed '/^$/d' | tail -n2 | head -n1)
+        _prev=${_prev##*/}
+      fi
+      if [ "$RESCUE_SELFHEAL" = on ] && [ -n "$_prev" ] && rescue_budget_check rollback; then
+        REASON_SNAPSHOT="selfheal-remove-escalate" rescue_snapshot >/dev/null 2>&1 || true
+        elog "[entrypoint] selfheal escalate: rollback to $_prev (remove-plugin ineffective)"
+        if rescue_restore "$_prev"; then
+          SELFHEAL_ROLLBACKS=$((SELFHEAL_ROLLBACKS+1)); rescue_budget_write
+          rescue_journal_add rollback "$_prev" ok; rescue_log "selfheal escalate rollback ok: $_prev"; return 0
+        fi
+        rescue_journal_add rollback "$_prev" fail; rescue_log "selfheal escalate rollback FAILED: $_prev"; return 1
+      fi
+      elog '[entrypoint] remove-plugin escalation unavailable (no prior snapshot / budget) -> report-only'
+      return 1
       ;;
     rollback)
       [ "$RESCUE_SELFHEAL" = on ] || { elog '[entrypoint] RESCUE_SELFHEAL=off; rollback -> report-only'; return 1; }

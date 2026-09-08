@@ -67,11 +67,11 @@ EXPOSE 3080
 # 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
 # Docker 的 COPY <src> 为目录时只复制其【内容】到目标、不保留目录本身；故先 mkdir 目标目录、
 # 再以 <dir>/. 结尾复制，确保内容落在 /opt/dsh-rescue/lifeboat.tmpl/ 子目录（LIFEBOAT_TMPL 语义）。
-COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/rescue-supervise.sh rescue /opt/dsh-rescue/
+COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh rescue /opt/dsh-rescue/
 RUN mkdir -p /opt/dsh-rescue/lifeboat.tmpl
 COPY profiles/lifeboat.tmpl/. /opt/dsh-rescue/lifeboat.tmpl/
 ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
-RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
+RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/logtee.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
     && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
     && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
 
@@ -81,7 +81,10 @@ RUN chmod +x /usr/local/bin/dsh-entrypoint \
 
 ENTRYPOINT ["dsh-entrypoint"]
 
-# 健康检查：探测 dsh 内部端口 3081（探测 socat 的 3080 会误报健康）
-# 构建时已预装 dsh，首次启动只需从 seed 复制（秒级），start_period 可显著缩短
+# 健康检查：探测 dsh 内部端口 3081（探测 socat 的 3080 会误报健康）。
+# 与 rescue 同判据（都连 127.0.0.1:3081）；差异仅在放弃时限。start-period 仅 docker run 直用（不经 compose）时生效；
+# 用 docker-compose 时其 healthcheck【覆盖】本值（compose 默认 start_period 300s，更宽松容首启冷启动+复制 seed）。
+# 口径：rescue 探测窗口 RESCUE_START_TIMEOUT(默认 120s) 针对每轮 dsh 进程 readiness，须 < docker 放弃时限(300s)，
+# 否则 rescue 会先于 docker 放弃而误回滚一个仍在正常冷启动的 dsh。构建时已预装 dsh，复制 seed 秒级。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
   CMD node -e "require('net').connect(3081,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
