@@ -219,26 +219,30 @@ rescue_do_heal() {
       [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; remove-plugin -> report-only'; return 1; }
       [ -n "$target" ] || { echo '[entrypoint] remove-plugin: no target -> report-only'; return 1; }
       if ! rescue_budget_check remove; then echo '[entrypoint] remove budget exceeded -> report-only'; return 1; fi
-      REASON_SNAPSHOT="selfheal-remove $target" rescue_snapshot >/dev/null 2>&1 || rescue_log 'selfheal: scene snapshot skipped'
-      echo "[entrypoint] selfheal remove-plugin: $target"
-      if dsh plugin --profile "$RESCUE_PROFILE" remove "$target" >/dev/null 2>&1; then
+      # 捕获目标后再拍场景快照（rescue_snapshot 会覆盖全局 $snap/$target 等）
+      RM_PKG="$target"
+      REASON_SNAPSHOT="selfheal-remove $RM_PKG" rescue_snapshot >/dev/null 2>&1 || rescue_log 'selfheal: scene snapshot skipped'
+      echo "[entrypoint] selfheal remove-plugin: $RM_PKG"
+      if dsh plugin --profile "$RESCUE_PROFILE" remove "$RM_PKG" >/dev/null 2>&1; then
         SELFHEAL_REMOVES=$((SELFHEAL_REMOVES+1)); rescue_budget_write
-        rescue_journal_add remove "$target" ok; rescue_log "selfheal remove-plugin ok: $target"; return 0
+        rescue_journal_add remove "$RM_PKG" ok; rescue_log "selfheal remove-plugin ok: $RM_PKG"; return 0
       fi
-      rescue_journal_add remove "$target" fail; rescue_log "selfheal remove-plugin FAILED: $target"; return 1
+      rescue_journal_add remove "$RM_PKG" fail; rescue_log "selfheal remove-plugin FAILED: $RM_PKG"; return 1
       ;;
     rollback)
       [ "$RESCUE_SELFHEAL" = on ] || { echo '[entrypoint] RESCUE_SELFHEAL=off; rollback -> report-only'; return 1; }
-      snap="$target"; [ -n "$snap" ] || snap="$newest_snap"
-      [ -n "$snap" ] || { echo '[entrypoint] rollback: no baseline -> report-only'; return 1; }
+      # 目标基线快照名需在本函数内独立持有：rescue_snapshot / rescue_restore 均会覆盖全局 $snap，
+      # 若用 $snap 作目标，场景快照一建即被改写，回滚会错误地“恢复”到刚建的坏现场。
+      RB_TARGET="$target"; [ -n "$RB_TARGET" ] || RB_TARGET="$newest_snap"
+      [ -n "$RB_TARGET" ] || { echo '[entrypoint] rollback: no baseline -> report-only'; return 1; }
       if ! rescue_budget_check rollback; then echo '[entrypoint] rollback budget exceeded -> report-only'; return 1; fi
-      REASON_SNAPSHOT="selfheal-rollback $snap" rescue_snapshot >/dev/null 2>&1 || true
-      echo "[entrypoint] selfheal rollback to $snap"
-      if rescue_restore "$snap"; then
+      REASON_SNAPSHOT="selfheal-rollback $RB_TARGET" rescue_snapshot >/dev/null 2>&1 || true
+      echo "[entrypoint] selfheal rollback to $RB_TARGET"
+      if rescue_restore "$RB_TARGET"; then
         SELFHEAL_ROLLBACKS=$((SELFHEAL_ROLLBACKS+1)); rescue_budget_write
-        rescue_journal_add rollback "$snap" ok; rescue_log "selfheal rollback ok: $snap"; return 0
+        rescue_journal_add rollback "$RB_TARGET" ok; rescue_log "selfheal rollback ok: $RB_TARGET"; return 0
       fi
-      rescue_journal_add rollback "$snap" fail; rescue_log "selfheal rollback FAILED: $snap"; return 1
+      rescue_journal_add rollback "$RB_TARGET" fail; rescue_log "selfheal rollback FAILED: $RB_TARGET"; return 1
       ;;
     *) return 1 ;;
   esac
