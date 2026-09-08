@@ -4,6 +4,11 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.1-dsh0.1.2-rc.1] - 2026-09-08
+
+### Fixed
+- **恢复 healthy 后的完整容器日志**：v0.3.0 的 tee 证据捕获在健康路径调 `rescue_close_ev` 杀掉了 fifo 唯一读端（tee），导致 dsh 在 healthy 之后的所有 stdout 输出无读者而被丢弃——`docker logs` 里 dsh 日志消失（长期还会填满 fifo 缓冲阻塞写端）。现在 healthy 后仅释放 entrypoint 自身写端，tee 持续把 dsh 输出转发到容器日志与证据文件，dsh 退出（EOF）后 tee 自然收尾；boot 失败路径语义不变。
+- 新增 `rescue_evidence_prune`：按 `RESCUE_KEEP` 修剪 `evidence/boot-*`，防止 healthy 会话持续镜像的 dsh.log 无限累积。
 ## [v0.3.0-dsh0.1.2-rc.1] - 2026-09-08
 
 插件**救援体系**完整落地：在 v0.2.0 的「自动回退 + 救生舱」之上，补齐**自动排查 / 根因归因 / 智能自愈**闭环（rescue-diagnose），并新增配套文档与宿主机验收脚本。全程严守红线：只动插件树四件套与 `$DSH_HOME/.rescue`，绝不自动改 `cordis.patch.yml`、会话 / 记忆 / 配置 / 凭据。
