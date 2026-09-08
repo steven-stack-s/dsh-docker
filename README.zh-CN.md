@@ -86,6 +86,12 @@ docker compose up -d
 
 ---
 
+## 🏷️ 版本
+
+发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh<dsh版本>`（如 `v0.3.0-dsh0.1.2-rc.1`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
+
+---
+
 ## 📄 License
 
 [MIT](LICENSE)
