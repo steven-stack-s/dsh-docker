@@ -4,6 +4,21 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.4-dsh0.1.2-rc.1] - 2026-09-09
+
+架构评审 1-7 修复（评审全文与逐项记录：`issues/2026-dsh-docker-架构评审与修复记录.md`）。
+
+### Fixed
+- **超时口径统一（#1）**：Dockerfile / compose / `.env.example` 三处健康与救援超时注释统一口径——healthcheck 与 rescue 同判据（都连 127.0.0.1:3081），差异仅在放弃时限；`RESCUE_START_TIMEOUT`(120s) 须小于 compose `start_period`(300s)，否则 rescue 会先于 docker 放弃而误回滚仍在冷启动的 dsh。
+- **healthy 后活动证据日志无限增长（#2）**：新增 `scripts/logtee.js`（tee 替身 + 轮转），supervise 证据双写链由 `logtag|tee` 改为 `logtag|logtee`——活动 `evidence/boot-*/dsh.log` 超过 `RESCUE_EVIDENCE_MAX`(默认 20MB) 即归档为 `.1` 重建，磁盘占用有界；logtee 缺失时逐级回退原 tee，容器日志不丢。新增 `scripts/t/test-logtee.sh`。
+- **主程序离线恢复缺口（#3）**：entrypoint 首启复制 seed 后不再 `rm -rf /opt/dsh-seed`（seed 在镜像只读层，rm 不释放空间且遮蔽离线恢复源）；`rescue dsh-reinstall` 在 npm 源不可达时改从 seed 覆盖恢复（镜像锁定版本）。
+- **remove-plugin 对 bundles 型故障不彻底（#4）**：`rescue_do_heal` 的 remove-plugin 分支在 `dsh plugin remove` 失败时于同一 attempt 升级 rollback，回退到场景快照之前最近的好快照；无更早快照或 rollback 预算不足时保持 report-only，不误改树。
+- **entrypoint librescue fallback 不完整（#7）**：librescue.sh 缺失的 no-op fallback 补 `RESCUE_DIR` 赋值（此前未定义，dir 函数路径全错）与 `rescue_dir()`。
+
+### Changed
+- **NODE_OPTIONS 与 MEM_LIMIT 联动说明（#5）**：`.env.example` 与 compose 注明 DSH 多进程 RSS 显著超堆值、堆值须远小于 MEM_LIMIT 及 OOM-kill 症状与配比示例。
+- **image 默认与 build DSH_VERSION 口径（#6）**：compose 注释 + README 明确默认 `:latest` 跟随最近 tag 发布、锁版用 `DSH_IMAGE=v<项目>-dsh<dsh版本>`、pull 与本地 build 两个来源勿混用。
+
 ## [v0.3.3-dsh0.1.2-rc.1] - 2026-09-09
 
 ### Changed

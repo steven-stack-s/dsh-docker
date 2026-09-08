@@ -22,7 +22,7 @@ services:
   dsh:
     # 镜像拉取策略：默认 ghcr.io 的 :latest（跟随最近一次 v*-dsh* tag 发布的锁定版本）。
     #   要彻底锁死某个版本，请显式指定 DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<项目版本>-dsh<dsh版本>
-    #   例如 v0.3.3-dsh0.1.2-rc.1（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
+    #   例如 v0.3.4-dsh0.1.2-rc.1（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
     image: ${DSH_IMAGE:-ghcr.io/steven-stack-s/dsh-docker:latest}
     # 本地 build：docker compose up -d --build（产物按上方 image: 名 tag；构建时锁定 dsh 版本）
     #   DSH_VERSION 默认 0.1.2-rc.1，可在 .env 设 DSH_VERSION=<版本> 或用 --build-arg 覆盖；
