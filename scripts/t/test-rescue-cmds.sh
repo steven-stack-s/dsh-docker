@@ -57,4 +57,13 @@ rep=$(sh "$RESCUE" report)
 echo "$rep" | grep -q 'DSH rescue report' || fail report-title
 echo "$rep" | grep -q 'inc-TEST' || fail report-incident
 
+# --- doctor（增强，Fix 2）---
+mkdir -p "$DSH_HOME/.rescue/state" "$DSH_HOME/.rescue/evidence"
+printf '%s' '{"phase":"healthy","ts":"x","abnormalExit":false}' > "$DSH_HOME/.rescue/state/last-run.json"
+doc=$(sh "$RESCUE" doctor)
+echo "$doc" | grep -q 'incidents dir ok' || { echo "doc=$doc"; fail doctor-incidents; }
+echo "$doc" | grep -q 'evidence dir ok' || fail doctor-evidence
+echo "$doc" | grep -q 'state dir ok' || fail doctor-state
+echo "$doc" | grep -q 'last run: phase=healthy' || { echo "doc=$doc"; fail doctor-lastrun; }
+
 echo 'ALL-PASS'

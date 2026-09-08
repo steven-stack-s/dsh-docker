@@ -41,10 +41,20 @@ case "$cmd" in
     [ -f "$pdir/package.json" ] && echo 'package.json present' || echo 'package.json MISSING'
     echo 'snapshots:'
     rescue_snapshot_list | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    # 增补（spec §8 / Fix 2）：evidence/state/incident 目录健康 + 上次运行状态（只读）
+    [ -d "$(state_dir 2>/dev/null)" ] && echo 'state dir ok' || echo 'state dir MISSING'
+    [ -d "$(incident_dir 2>/dev/null)" ] && echo 'incidents dir ok' || echo 'incidents dir MISSING'
+    [ -d "$(evidence_dir 2>/dev/null)" ] && echo 'evidence dir ok' || echo 'evidence dir MISSING'
+    lr=$(rescue_state_read_lastrun 2>/dev/null || true)
+    if [ -n "$lr" ]; then
+      _lp=$(printf '%s' "$lr" | sed -n 's/.*"phase":"\([^"]*\)".*/\1/p')
+      echo "last run: phase=$_lp"
+    else
+      echo 'last run: none'
+    fi
     echo 'read-only diagnostic done'
     ;;
   plugin)
-    [ "$#" -gt 0 ] || { echo 'usage: rescue plugin <pnpm args> e.g. add pkg'; exit 2; }
     # 变更上下文：快照 meta 记 reason（如 "plugin add pkg"），供 diagnose/report 归因
     sub="${1:-}"; pkg="${2:-}"
     case "$sub" in

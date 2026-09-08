@@ -47,7 +47,10 @@ grep -q '"recommendedHeal":"rollback"' "$R/d.json" || { echo "D="$(cat "$R/d.jso
 # E. --write-incident：产出的 incident body 含 id/redline/selfHeal/evidenceRef
 printf '%s\n' 'remove-plugin|@scope/bad-plugin|2026-09-07T10:06:00+08:00|ok' > "$T/journal.txt"
 node "$ROOT/scripts/diagnose.js" --phase boot --evidence "$R/evidence/boot-a" --rescue-dir "$R"   --write-incident --journal "$T/journal.txt" --trigger probe-timeout --evidence-ref evidence/boot-a > "$R/e.json"
-node -e "const o=require('$R/e.json'); if(!o.id||!o.id.startsWith('inc-'))process.exit(1); if(o.redline.cordisPatchTouched!==false)process.exit(2); if(o.selfHeal.actions.length!==1)process.exit(3); if(o.evidenceRef!=='evidence/boot-a')process.exit(4);" || fail e-incident
-grep -q '"outcome":"recovered-remove"' "$R/e.json" || fail e-outcome
+# F. runtime 归因 + 无 boot 证据（运行期崩溃仅 changeContext，无该轮 evidence 目录）-> 可产 phase=runtime report-only incident（Fix 1a）
+R6="$T/h6"; mkdir -p "$R6"
+node "$ROOT/scripts/diagnose.js" --phase runtime --write-incident --rescue-dir "$R6" --trigger child-exit > "$R6/f.json" 2>"$R6/f.err" || { echo "F threw: $(cat "$R6/f.err")"; fail f-throw; }
+node -e "const o=require('$R6/f.json'); if(o.phase!=='runtime')process.exit(1); if(o.symptom.type!=='healthy-then-crash')process.exit(2); if(o.selfHeal.outcome!=='report-only')process.exit(3); if(o.selfHeal.recommended!=='report-only')process.exit(4); if(o.redline.cordisPatchTouched!==false)process.exit(5);" || { echo "F bad=$(cat "$R6/f.json")"; fail f-incident; }
+grep -q '"phase":"runtime"' "$R6/f.json" || fail f-phase
 echo 'ALL-PASS'
 
