@@ -8,10 +8,20 @@
 
 ## ✨ Highlights
 
-- **Version-pinned at build + upgrade in container** — dsh+pnpm are pre-installed into a seed (`/opt/dsh-seed`) at build time; on first boot the seed is copied to `/opt/dsh` (offline, version-pinned, ready in seconds). Upgrade with `docker exec dsh npm install -g @deepseek-ai/dsh@<version> && docker restart dsh` — no image rebuild needed.
-- **Secure by default** — `dsh web` intentionally listens only on `127.0.0.1:3081` (official security design); `socat` forwards the external `3080` port into it. Intranet-only by default; password + MFA authentication can be added for remote access.
+**🧱 Architecture — three-layer separation, ready in seconds, upgrades without image rebuilds**
+
+- **Version-pinned at build + in-image seed** — dsh+pnpm are pre-installed into a seed (`/opt/dsh-seed`) at build time; on first boot the seed is copied to `/opt/dsh` (offline, version-pinned, ready in seconds). The seed stays in the image layer, so a broken main program can be restored offline.
+- **Program decoupled from image, upgraded in-container** — the DSH program lives on a mounted volume; daily upgrades are `docker exec dsh npm install -g @deepseek-ai/dsh@<version> && docker restart dsh` — no image rebuild needed.
 - **Fully persisted data** — three separate volumes for program / user data (sessions, configs, plugins, memory) / workspace; backup = copy the directory.
+- **Secure by default** — `dsh web` intentionally listens only on `127.0.0.1:3081` (official security design); `socat` forwards the external `3080` port into it. Intranet-only by default; password + MFA authentication can be added for remote access.
 - **Multi-architecture** — GitHub Actions automatically builds `linux/amd64` + `linux/arm64` images and publishes them to `ghcr.io`.
+
+**🛟 Self-healing — deterministic root-cause analysis, red-line-guarded auto recovery**
+
+- **Deterministic root-cause analysis (no LLM)** — `diagnose.js` attributes boot failures with a rules table + change context and recommends an action (`remove-plugin` / `rollback` / `report-only`); unit-testable, auditable, and predictable.
+- **Hard red lines** — auto-recovery touches only the plugin-tree four-piece set (package.json / pnpm-lock.yaml / pnpm-workspace.yaml / node_modules) plus `.rescue` state, **never cordis.patch.yml / sessions / memory / configs / credentials**.
+- **Complete fallback ladder** — snapshot rollback → plugin removal → escalated rollback → report-only → lifeboat; every rung has a budget cap and full audit logging.
+- **Near-zero-cost snapshots + evidence loop** — `cp -al` hard-link snapshots (auto-degrades to `cp -a` across filesystems); boot output flows through a fifo with per-line timestamps, dual-written to docker logs and evidence, so failures are always traceable.
 
 ---
 
