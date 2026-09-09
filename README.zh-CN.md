@@ -9,10 +9,20 @@
 
 ## ✨ 方案亮点
 
-- **构建时锁版本 + 容器内升级**：镜像构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），首次启动从 seed 复制到 `/opt/dsh`（离线、版本固定、秒级就绪）；升级只需 `docker exec dsh npm install -g @deepseek-ai/dsh@<版本> && docker restart dsh`，无需重建镜像
-- **安全默认**：`dsh web` 刻意只监听 `127.0.0.1:3081`（官方安全设计），`socat` 把外部 `3080` 转发进去；默认内网直连，远程访问可加装账号密码 + MFA 认证
+**🧱 架构 —— 三层分离，秒级就绪，升级不重建镜像**
+
+- **构建时锁版本 + 镜像内 seed**：构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），首次启动离线复制到 `/opt/dsh`（版本固定、秒级就绪）；seed 保留在镜像层，主程序损坏可离线恢复
+- **程序与镜像分离，容器内升级**：DSH 程序本体装在挂载卷，日常升级 = `docker exec dsh npm install -g @deepseek-ai/dsh@<版本> && docker restart dsh`，无需重建镜像
 - **数据全持久化**：程序 / 用户数据（会话、配置、插件、记忆库）/ 工作区三卷分离，备份 = 复制目录
+- **安全默认**：`dsh web` 刻意只监听 `127.0.0.1:3081`（官方安全设计），`socat` 把外部 `3080` 转发进去；默认内网直连，远程访问可加装账号密码 + MFA 认证
 - **多架构**：GitHub Actions 自动构建 `linux/amd64` + `linux/arm64`，发布到 `ghcr.io`
+
+**🛟 自愈体系 —— 确定性归因，守红线自动恢复**
+
+- **确定性根因归因（非 LLM）**：`diagnose.js` 用规则表 + 变更上下文判定启动失败根因并给出处置建议（remove-plugin / rollback / report-only），可单测、可审计、行为可预期
+- **严守红线**：自动处置只动插件树四件套（package.json / pnpm-lock.yaml / pnpm-workspace.yaml / node_modules）+ `.rescue` 状态，**绝不动 cordis.patch.yml / 会话 / 记忆 / 配置 / 凭据**
+- **完整降级阶梯**：快照回滚 → 摘插件 → 升级 rollback → report-only → lifeboat 救生舱，逐级预算限额，全程审计日志留痕
+- **近零成本快照 + 证据闭环**：`cp -al` 硬链接快照（跨文件系统自动降级 `cp -a`）；启动日志经 fifo 逐行加时间戳、双写 docker logs 与 evidence，启动失败有据可查
 
 ---
 
