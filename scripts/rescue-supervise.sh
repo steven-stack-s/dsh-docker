@@ -246,7 +246,9 @@ rescue_supervise() {
     elog "[entrypoint] boot attempt $attempt/$max_attempt (profile=$RESCUE_PROFILE)"
     SELFHEAL_TRIGGER="boot-attempt-$attempt"
     rescue_start_child
-    if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))"; then
+    # --pid "$child"：dsh 进程一消失即立即判失败，把「启动后立刻崩溃」的失败检测
+    # 从 RESCUE_START_TIMEOUT(默认 120s) 降到秒级。child 为空时探针自动忽略该项。
+    if node "$probe" "$PORT_INNER" "$((RESCUE_START_TIMEOUT * 1000))" --pid "$child"; then
       elog "[entrypoint] dsh healthy on 127.0.0.1:$PORT_INNER"
       # 修复(丢日志根因)：healthy 后不能杀 tee——tee 是 fifo 唯一读端，杀它会让 dsh
       # 后续 stdout 输出无读者而全部丢弃（v0.3.0 tee 证据捕获引入：docker logs 在

@@ -4,6 +4,18 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.7-dsh0.1.5-rc.1] - 2026-09-10
+
+### Added
+- **`probe-ready.js` 分层就绪探测**：启动窗口的健康判定由「TCP 端口可连接」扩展为三层——**L1** TCP 监听、**L2** 在其上完成一次 HTTP 往返、**L3** 连续 `--stable`(默认 2) 次成立。退出码契约不变（exit 0 = 就绪），`rescue-supervise.sh` 的调用语义零变更。
+  - L2 **任何状态码都算通过**：装了认证网关（如 `@xgone/dsh-remote`）时，未认证的 `GET /` 返回的是登录页而非应用外壳；若要求 200 + 特定内容，这类实例会被永久判为不健康并触发回滚死循环。故 L2 只证明「HTTP 栈真的能应答」，只有连上了却拿不到任何 HTTP 响应（超时/连接重置）才算失败。
+  - 新增可选 `--pid <pid>`：目标进程一消失即立即判失败，把「启动后立刻崩溃」的检测从 `RESCUE_START_TIMEOUT`(默认 120s) 降到秒级（`rescue-supervise.sh` 传入 `$child`；不传则行为与改造前完全一致）。
+  - 分层结果以英文 `[probe]` 前缀、按**状态变化**输出：1s 轮询下不刷屏，同时保留「卡在哪一层」的诊断线索。
+  - 新增 `scripts/t/test-probe-ready.sh`（用法/HTTP 就绪/仅 TCP 无应答/无监听/`--pid` 秒级失败/`--stable`/旧参数兼容）。
+
+### 已知边界
+- **覆盖不到「服务端正常、但浏览器端客户端插件树激活失败」**（如 0.1.2→0.1.5 升级后首启出现的 `25 entries did not activate`）：该类审计只在浏览器端（`dsh-web-frontend`）执行，服务端的端口、HTTP 与客户端模块清单全程正常，探针无从取得差异信号。端到端覆盖需无头浏览器，代价是镜像 +数百 MB、启动变慢十几秒。
+
 ## [v0.3.6-dsh0.1.5-rc.1] - 2026-09-10
 
 镜像锁定的 DSH 版本由 `0.1.2-rc.1` 升级至 `0.1.5-rc.1`（tag 后缀同步变更）。CI 依 tag 解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故镜像 seed 内即为 0.1.5-rc.1。
