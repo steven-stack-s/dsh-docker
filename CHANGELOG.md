@@ -4,6 +4,16 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.6-dsh0.1.5-rc.1] - 2026-09-10
+
+镜像锁定的 DSH 版本由 `0.1.2-rc.1` 升级至 `0.1.5-rc.1`（tag 后缀同步变更）。CI 依 tag 解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故镜像 seed 内即为 0.1.5-rc.1。
+
+### Changed
+- **容器日志统一为英文**：`entrypoint.sh` 的 8 处 `elog`（首启播种 / dsh 就绪 / socat 转发 / Host 白名单等，即 `docker logs` 中 `[entrypoint]` 前缀的各行）改为英文，便于日志检索与在非中文环境下的阅读与转发。`rescue` CLI 提示、`rescue report` 及 `diagnose.js` 写入 incident 的诊断文本（`rationale` / `detail` / `kw`）**保持中文**；源码注释与本文档亦保持中文。`scripts/t/` 全量单测通过（9/9）。
+
+### 升级注意（0.1.2-rc.1 → 0.1.5-rc.1）
+- 该跨度含**破坏性变更**：会话数据格式升级至 V3（迁移后**旧版不可读**，原文件保留）；插件 Agent API 移除 `ctx.agent`；`Inbox` 改为类型接口；Web 插件面板 Slot 由 `conversation` 迁移为 `main` 的 `conversation` key（原 Detail 面板移除）；Web `minimal` 默认仅提供持久 shell。升级前请确认 profile 内第三方插件已适配新核心。
+
 ## [v0.3.5-dsh0.1.2-rc.1] - 2026-09-10
 
 ### Added
