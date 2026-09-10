@@ -73,7 +73,7 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 
 ## 4. Auto-rollback (entrypoint)
 
-On restart the entrypoint starts dsh web as a **child process** and probes 127.0.0.1:3081 inside the container, waiting up to `RESCUE_START_TIMEOUT` (default 120s). “Failed to start” = 3081 not listening within the window, or the dsh main process exited.
+On restart the entrypoint starts dsh web as a **child process** and runs a **layered readiness probe** (`probe-ready.js`) against 127.0.0.1:3081 inside the container, waiting up to `RESCUE_START_TIMEOUT` (default 120s). “Failed to start” = any layer unsatisfied within the window: L1 TCP not listening, L2 connected but no HTTP response at all, or L3 not satisfied on `--stable` (default 2) consecutive checks. Since v0.3.7 the probe also receives `--pid`, so it fails immediately once the dsh main process is gone instead of waiting out the window.
 
 Rollback flow:
 
