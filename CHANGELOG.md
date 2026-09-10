@@ -4,6 +4,13 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.3.5-dsh0.1.2-rc.1] - 2026-09-10
+
+### Added
+- **健康基线快照**：entrypoint 在确认 dsh 健康后自动拍一份基线（`RESCUE_SNAPSHOT_ON_HEALTHY=off` 可关）。插件市场（`dshmarket` 在 dsh 进程内直接改 profile 的 package.json/node_modules）**绕过 rescue 封装、不会拍预防性快照**，此前市场更新后启动失败只能 report-only；现由「变更前已有的健康基线」充当回退点，自愈可自动 rollback 恢复。仅在已被证明可启动的状态下拍，失败不影响启动，并在 rescue.log 记 re-baselining 审计（含 profile 指纹变化提示）。
+
+### Fixed
+- **快照编号重用 + 「最新/最老」按字典序误判**（会导致自愈回滚到错误快照）：`next_snap_name` 由「找第一个空缺编号」改为「最大编号 + 1」（prune 删除后不再复用编号）；新增 `rescue_snapshot_newest/oldest`（按 meta.created 排序，缺失回退目录 mtime），`diagnose.js` 的最新快照选取、supervise 的 `newest_snap` / 基线 / remove-escalate 目标、`rescue rollback` 与 `rescue_prune` 全部改用它。真机复现：补位编号下旧快照被当成最新。
 ## [v0.3.4-dsh0.1.2-rc.1] - 2026-09-09
 
 架构评审 1-7 修复（评审全文与逐项记录：`issues/2026-dsh-docker-架构评审与修复记录.md`）。

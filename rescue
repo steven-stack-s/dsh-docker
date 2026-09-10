@@ -31,7 +31,7 @@ case "$cmd" in
   status)
     echo "RESCUE_DIR=$RESCUE_DIR  KEEP=$RESCUE_KEEP  profile=$(profile_dir)"
     echo 'snapshots:'
-    rescue_snapshot_list | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    rescue_snapshot_list_by_time | sed 's#.*/\(snap-[0-9]*\)#  \1#'
     echo 'last log:'
     tail -n5 "$LOG_FILE" 2>/dev/null || true
     ;;
@@ -40,7 +40,7 @@ case "$cmd" in
     [ -d "$pdir" ] && echo "ok profile dir: $pdir" || echo "MISSING profile dir: $pdir"
     [ -f "$pdir/package.json" ] && echo 'package.json present' || echo 'package.json MISSING'
     echo 'snapshots:'
-    rescue_snapshot_list | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    rescue_snapshot_list_by_time | sed 's#.*/\(snap-[0-9]*\)#  \1#'
     # 增补（spec §8 / Fix 2）：evidence/state/incident 目录健康 + 上次运行状态（只读）
     [ -d "$(state_dir 2>/dev/null)" ] && echo 'state dir ok' || echo 'state dir MISSING'
     [ -d "$(incident_dir 2>/dev/null)" ] && echo 'incidents dir ok' || echo 'incidents dir MISSING'
@@ -78,8 +78,8 @@ case "$cmd" in
     esac
     ;;
   rollback)
-    list=$(rescue_snapshot_list)
-    newest=$(echo "$list" | tail -n1 | xargs -r basename)
+    newest=$(rescue_snapshot_newest | xargs -r basename)
+    [ -n "$newest" ] || { echo 'no snapshot to rollback to'; exit 1; }
     [ -n "$newest" ] || { echo 'no snapshot to rollback to'; exit 1; }
     rescue_restore "$newest"
     echo "restored $newest; restart container: docker restart dsh"
