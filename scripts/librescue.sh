@@ -23,9 +23,18 @@ rescue_dir() { printf '%s' "$RESCUE_DIR"; }
 
 next_snap_name() {
   mkdir -p "$RESCUE_DIR"
-  i=1
-  while [ -d "$RESCUE_DIR/snap-$(printf '%04d' "$i")" ]; do i=$((i+1)); done
-  printf 'snap-%04d' "$i"
+  # 取「已有最大编号 + 1」而非「第一个空缺编号」：prune 删除后重用编号会让按名排序的
+  # 最新/最老判断错乱（诊断与自愈据此选 baseline，会回滚到错误快照）。
+  max=0
+  for d in "$RESCUE_DIR"/snap-*; do
+    [ -d "$d" ] || continue
+    num=${d##*/snap-}
+    case "$num" in ''|*[!0-9]*) continue ;; esac
+    num=$(printf '%s' "$num" | sed 's/^0*//')
+    [ -n "$num" ] || num=0
+    if [ "$num" -gt "$max" ]; then max=$num; fi
+  done
+  printf 'snap-%04d' "$((max + 1))"
 }
 
 rescue_snapshot() {
@@ -69,7 +78,7 @@ rescue_meta_read() {
 rescue_prune() {
   n=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | wc -l | tr -d ' ')
   while [ "$n" -gt "$RESCUE_KEEP" ]; do
-    oldest=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | sort | head -n1)
+    oldest=$(rescue_snapshot_oldest)
     [ -n "$oldest" ] || break
     rescue_log "prune $oldest"
     rm -rf "$oldest"
@@ -78,6 +87,26 @@ rescue_prune() {
 }
 
 rescue_snapshot_list() { ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | sort; }
+
+# ---- 时间序（最新/最老）判定 ----
+# 编号可能补位（历史遗留）或被 prune 删除后仍按名排序，字典序不足以判定「最新/最老」；
+# 凡涉及二者的判断一律走这两个函数，避免诊断/自愈选错 baseline。
+rescue_snap_created() {
+  # $1 = 快照目录；优先 meta.created，缺失时回退目录 mtime
+  d="$1"
+  c=$(sed -n 's/.*"created":"\([^"]*\)".*/\1/p' "$d/meta.json" 2>/dev/null | head -n1)
+  [ -n "$c" ] || c=$(date -r "$d" '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || true)
+  printf '%s' "$c"
+}
+rescue_snapshot_list_by_time() {
+  for d in "$RESCUE_DIR"/snap-*; do
+    [ -d "$d" ] || continue
+    c=$(rescue_snap_created "$d")
+    printf '%s\t%s\n' "$(printf '%s' "$c" | cut -c1-19)" "$d"
+  done | sort | cut -f2
+}
+rescue_snapshot_newest() { rescue_snapshot_list_by_time | tail -n1; }
+rescue_snapshot_oldest() { rescue_snapshot_list_by_time | head -n1; }
 
 rescue_fingerprint() {
   d="$1"

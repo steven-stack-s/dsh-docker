@@ -65,8 +65,18 @@ function readDirJson(dir) {
     let o = {};
     try { o = JSON.parse(meta); } catch (e) { o = { created: '', reason: '' }; }
     o._name = n;
+    try { o._mt = fs.statSync(path.join(dir, n)).mtimeMs; } catch (e) { o._mt = 0; }
     out.push(o);
   }
+  // 按创建时间排序：快照编号可能补位（历史遗留）或被 prune 删除后重用，目录名字典序
+  // 不足以判定「最新」；created 缺失时回退目录 mtime。最新的排在最后（调用方取末位）。
+  out.sort((a, b) => {
+    const ca = a.created || '', cb = b.created || '';
+    if (ca && cb && ca !== cb) return ca < cb ? -1 : 1;
+    if (ca && !cb) return -1;
+    if (!ca && cb) return 1;
+    return (a._mt || 0) - (b._mt || 0);
+  });
   return out;
 }
 // 从快照 meta 找“最近一次插件变更”：最新快照若 reason 形如 "plugin add <pkg>" / "plugin remove <pkg>" 即其为基线

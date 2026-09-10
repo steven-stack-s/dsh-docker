@@ -75,6 +75,27 @@ rescue_evidence_prune() {
     n=$((n-1))
   done
 }
+# 健康基线快照（v0.3.5）：boot 确认健康后拍一份「已被证明能启动」的基线，
+# 为绕过 rescue 封装的变更（插件市场 dshmarket 在 dsh 进程内直接改 profile 的
+# package.json/node_modules）提供回退点——变更前的状态只能由变更前已存在的快照提供。
+# 安全：任何失败只记日志、绝不影响启动；RESCUE_SNAPSHOT_ON_HEALTHY=off 可关闭。
+rescue_snapshot_baseline() {
+  [ "${RESCUE_SNAPSHOT_ON_HEALTHY:-on}" = on ] || return 0
+  prev=$(rescue_snapshot_newest 2>/dev/null | xargs -r basename)
+  if [ -n "$prev" ]; then
+    dfr=$(rescue_live_differs_from "$prev" 2>/dev/null || echo 0)
+    if [ "$dfr" = 1 ]; then
+      rescue_log "profile changed since $prev (market/manual plugin op); re-baselining"
+    fi
+  fi
+  if REASON_SNAPSHOT='boot-healthy baseline' rescue_snapshot >/dev/null 2>&1; then
+    cur=$(rescue_snapshot_newest 2>/dev/null | xargs -r basename)
+    rescue_log "baseline snapshot on healthy: $cur"
+  else
+    rescue_log 'baseline snapshot on healthy skipped'
+  fi
+  return 0
+}
 # 诊断：返回 0 并回填 DIAG_JSON。仅当 diagnose 可用（RESCUE_DIAG）才调用。
 rescue_diagnose() {
   ph="$1"; trg="$2"; evd="$3"
@@ -150,7 +171,7 @@ rescue_do_heal() {
       # 无更早快照或 rollback 预算不足时不升级，保持 report-only（不误改树）。
       rescue_journal_add remove "$RM_PKG" fail; rescue_log "selfheal remove-plugin FAILED, escalate: $RM_PKG"
       _prev=''
-      _pl=$(rescue_snapshot_list)
+      _pl=$(rescue_snapshot_list_by_time)
       if [ "$(printf '%s\n' "$_pl" | sed '/^$/d' | wc -l)" -ge 2 ]; then
         _prev=$(printf '%s\n' "$_pl" | sed '/^$/d' | tail -n2 | head -n1)
         _prev=${_prev##*/}
@@ -210,7 +231,7 @@ rescue_supervise() {
   
   # 最新快照（既有“回滚最新”兜底目标 + 基线参考）
   newest_snap=''
-  [ -n "$(rescue_snapshot_list 2>/dev/null)" ] && newest_snap=$(rescue_snapshot_list 2>/dev/null | tail -n1 | xargs -r basename)
+  [ -n "$(rescue_snapshot_list 2>/dev/null)" ] && newest_snap=$(rescue_snapshot_newest 2>/dev/null | xargs -r basename)
   # 上次运行 abnormalExit（运行期崩溃补判，规范 §6.2）：记录即可；自动处置交由报告人工复核（保守默认）
   lr=$(rescue_state_read_lastrun 2>/dev/null || true)
   if [ -n "$lr" ]; then
@@ -232,6 +253,9 @@ rescue_supervise() {
       # healthy 之后不再有 dsh 日志）。只释放 entrypoint 自己的写端，tee 继续把 dsh
       # 输出转发到容器 stdout(即 docker logs)与 evidence；dsh 退出(写端 EOF)后 tee 自然结束。
       exec 3>&- 2>/dev/null || true
+      # 健康基线快照：仅在「已被证明能启动」的状态下拍，为插件市场等绕过 rescue 封装的
+      # 变更提供回退点（失败不影响启动；RESCUE_SNAPSHOT_ON_HEALTHY=off 可关）。
+      rescue_snapshot_baseline
       rescue_state_write_lastrun "{\"phase\":\"healthy\",\"ts\":\"$(rescue_ts)\",\"pid\":\"$child\",\"abnormalExit\":false}" 2>/dev/null || true
       rc=0
       wait "$child" || rc=$?
