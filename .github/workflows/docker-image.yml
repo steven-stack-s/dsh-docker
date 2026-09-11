@@ -2,11 +2,16 @@
 # 构建并发布 DSH 基础镜像到 GitHub Container Registry (ghcr.io)
 #
 # 触发：
-#   - 推送 v* tag → 镜像 tag 为该 tag + latest
-#     tag 格式：v<项目版本>-dsh<dsh版本>，如 v0.1.0-dsh0.1.2-rc.1
-#     dsh 版本作为 DSH_VERSION 构建参数 → 镜像 seed 与 dsh 版本严格一致；
-#     两个版本号同时写入镜像 label（docker inspect 可见）
-#   - 推送 main 分支 → 镜像 tag 为 main，seed 装 npm latest（跟随 npm 发布节奏）
+#   - 推送 v* tag -> 镜像 tag 为该 tag + latest
+#     tag 格式：v<项目版本>-dsh<dsh版本>，如 v0.3.7-dsh0.1.5-rc.1
+#     解析与校验在 scripts/ci-image-tags.sh（有单测 scripts/t/test-ci-image-tags.sh）
+#   - 推送 main 分支 -> 镜像 tag 为 main，seed 装 npm latest
+#   - 手动 dispatch   -> main 分支打 :main，其他分支打 :branch-<slug>（不污染 :main）
+#
+# 发布门禁（三道）：
+#   1) unit-tests job 跑 scripts/t/test-*.sh，不通过则 build 根本不执行
+#   2) tag 严格校验：dsh 版本必须以数字开头，否则拒绝发布（防"假锁版"镜像）
+#   3) 镜像自证：tag 构建后用镜像内 seed 的 dsh --version 断言 == tag 后缀
 #
 # 说明：镜像含运行环境 + dsh/pnpm seed（/opt/dsh-seed），首次启动由 entrypoint
 # 复制到挂载卷 /opt/dsh；日常升级走 docker exec npm install（见 entrypoint.sh）。
@@ -20,14 +25,46 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# 发布串行化：:latest 是所有 tag 构建共享的输出。若按 github.ref 分组，v0.3.8 与 v0.3.9 的构建
+# 分属不同组、互不排队，先触发但后完成的旧构建会把 :latest 回退到旧版本。故必须全局单组。
+# cancel-in-progress: false = 排队而非取消，避免打断正在推送的镜像。
+concurrency:
+  group: image-publish
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
-  # ★ 改为你的 GitHub 用户名或组织名（小写）
+  # 镜像名取仓库全名（含所有者，ghcr 要求小写，由 ci-image-tags.sh 统一转小写）
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  # ---- 门禁 1：单测（~11s）----
+  unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run rescue unit tests
+        run: |
+          fail=0
+          for f in scripts/t/test-*.sh; do
+            printf '%-42s' "$(basename "$f")"
+            if sh "$f" >/tmp/unit-test.out 2>&1; then
+              echo PASS
+            else
+              echo FAIL
+              cat /tmp/unit-test.out
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+  build-and-push:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    # 纵深防御：任何步骤若意外"永不返回"（例如误把长驻进程当一次性命令执行）都不会挂满 6 小时
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -51,28 +88,11 @@ jobs:
 
       - name: Compute image tags
         id: meta
-        run: |
-          # ghcr.io 要求镜像名全小写（github.repository 可能含大写）
-          IMAGE_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            TAG="${{ github.ref_name }}"           # v0.1.0-dsh0.1.2-rc.1
-            # 双版本格式校验：必须形如 v<项目版本>-dsh<dsh版本>
-            if [[ "$TAG" != *-dsh* ]]; then
-              echo "::error::tag 必须形如 v<项目版本>-dsh<dsh版本>，如 v0.1.0-dsh0.1.2-rc.1"
-              exit 1
-            fi
-            PROJ_VERSION="${TAG%%-dsh*}"           # v0.1.0
-            PROJ_VERSION="${PROJ_VERSION#v}"       # 0.1.0
-            DSH_VERSION="${TAG#*-dsh}"             # 0.1.2-rc.1
-            TAGS="${{ env.REGISTRY }}/${IMAGE_LOWER}:${TAG},${{ env.REGISTRY }}/${IMAGE_LOWER}:latest"
-          else
-            TAGS="${{ env.REGISTRY }}/${IMAGE_LOWER}:main"
-            DSH_VERSION="latest"
-            PROJ_VERSION=""
-          fi
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-          echo "dsh_version=${DSH_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "proj_version=${PROJ_VERSION}" >> "$GITHUB_OUTPUT"
+        # 表达式一律经 env 传入：直接插进 run 脚本是 GitHub 官方列出的脚本注入向量。
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: sh scripts/ci-image-tags.sh >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -86,3 +106,28 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ steps.meta.outputs.proj_version }}
             org.opencontainers.image.dsh-version=${{ steps.meta.outputs.dsh_version }}
+          # 缓存只对 tag 构建启用：分支构建的 DSH_VERSION 恒为字符串 "latest"，若复用缓存，
+          # npm install -g @deepseek-ai/dsh@latest 那一层会命中旧缓存、不再跟随 npm 上的最新版本。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          no-cache: ${{ github.ref_type != 'tag' }}
+
+      # ---- 门禁 3：镜像自证（防"标着锁版、实为 latest"）----
+      - name: Verify image carries the locked DSH version
+        if: github.ref_type == 'tag'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          EXPECT: ${{ steps.meta.outputs.dsh_version }}
+        run: |
+          IMG="${TAGS%%,*}"
+          # 必须显式 --entrypoint：本镜像的 ENTRYPOINT 是 dsh-entrypoint，镜像名之后的命令只会作为
+          # CMD 追加给它，而 entrypoint.sh 不消费 "$@" —— 那样会照常走 seed/socat 并真的启动 dsh web：
+          # 起得来就永不返回，起不来也要等满自愈窗口，两种都会让门禁误红甚至挂死。
+          got="$(docker run --rm --platform linux/amd64 --entrypoint /opt/dsh-seed/bin/dsh \
+                  "$IMG" --version 2>/tmp/smoke.err | tr -d '[:space:]')"
+          echo "image=$IMG expected=$EXPECT got=$got"
+          if [ "$got" != "$EXPECT" ]; then
+            echo "::error::镜像内 seed 的 dsh 版本($got) 与 tag 后缀($EXPECT) 不一致：这就是假锁版镜像"
+            echo '--- smoke stderr ---'; cat /tmp/smoke.err 2>/dev/null || true
+            exit 1
+          fi
