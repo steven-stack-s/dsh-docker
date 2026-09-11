@@ -66,4 +66,54 @@ echo "$doc" | grep -q 'evidence dir ok' || fail doctor-evidence
 echo "$doc" | grep -q 'state dir ok' || fail doctor-state
 echo "$doc" | grep -q 'last run: phase=healthy' || { echo "doc=$doc"; fail doctor-lastrun; }
 
+# --- verify: 完好快照必须通过（快照完整性 P0-6）---
+if ! sh "$RESCUE" verify >/tmp/rescue-verify.out 2>&1; then
+  cat /tmp/rescue-verify.out
+  fail verify-fresh-snapshots
+fi
+# --- verify: live 被就地改写（硬链接共享 inode）后，快照已不可信，必须报错 ---
+printf 'tamper-after-snapshot\n' >> "$DSH_HOME/profiles/web/node_modules/demo-pkg/index.js"
+if sh "$RESCUE" verify >/tmp/rescue-verify2.out 2>&1; then
+  cat /tmp/rescue-verify2.out
+  fail verify-missed-pollution
+fi
+echo "$(cat /tmp/rescue-verify2.out)" | grep -q 'snap-000' || fail verify-no-detail
+
+# --- snapshots: 列表必须带"与 live 相同/不同"标记（P1-4：用户要能分辨哪个可用）---
+sn=$(sh "$RESCUE" snapshots)
+echo "$sn" | grep -q 'snap-0001' || { echo "$sn"; fail snapshots-list; }
+echo "$sn" | grep -qE 'SAME|differs' || { echo "$sn"; fail snapshots-live-marker; }
+
+# --- rollback --dry-run 不得改动任何东西 ---
+printf '%s' '{"name":"web","dependencies":{"demo":"9.9.9"}}' > "$DSH_HOME/profiles/web/package.json"
+dr=$(sh "$RESCUE" rollback --dry-run) || fail rollback-dryrun-rc
+echo "$dr" | grep -q 'dry-run' || { echo "$dr"; fail rollback-dryrun-msg; }
+grep -q '9.9.9' "$DSH_HOME/profiles/web/package.json" || fail rollback-dryrun-mutated-live
+
+# --- rollback --to 不存在的快照 -> 非 0 ---
+sh "$RESCUE" rollback --to snap-9999 >/dev/null 2>&1 && fail rollback-to-missing-must-fail
+
+# --- rollback --to 一个与 live 完全相同的快照 -> 必须拒绝（否则会把空操作记成"已恢复"）---
+sh "$RESCUE" snapshot >/dev/null
+same=$(sh "$RESCUE" snapshots | grep -E 'SAME' | head -n1 | awk '{print $1}')
+[ -n "$same" ] || fail snapshots-no-same-detected
+if sh "$RESCUE" rollback --to "$same" >/tmp/rb-noop.out 2>&1; then
+  cat /tmp/rb-noop.out; fail rollback-to-noop-must-fail
+fi
+
+# --- rollback（无参）必须跳过与 live 相同的快照，挑真正不同的那个 ---
+out=$(sh "$RESCUE" rollback) || { echo "$out"; fail rollback-auto-rc; }
+echo "$out" | grep -q 'restored snap-' || { echo "$out"; fail rollback-auto-msg; }
+grep -q '1.0.0' "$DSH_HOME/profiles/web/package.json" || fail rollback-auto-restored-differing-snapshot
+
+# --- export: 生成诊断包，且只含救援元数据（不含插件树/会话/密钥）---
+exp="$T/bundle.tar.gz"
+sh "$RESCUE" export "$exp" >/dev/null || fail export-rc
+[ -f "$exp" ] || fail export-no-file
+tl=$(tar -tzf "$exp")
+echo "$tl" | grep -q 'environment.txt' || { echo "$tl"; fail export-no-env; }
+echo "$tl" | grep -q 'incidents/' || { echo "$tl"; fail export-no-incidents; }
+echo "$tl" | grep -q 'node_modules' && { echo "$tl"; fail export-must-not-contain-node-modules; }
+echo "$tl" | grep -qi 'sk-' && { echo "$tl"; fail export-must-not-contain-secrets; }
+
 echo 'ALL-PASS'

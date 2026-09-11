@@ -52,5 +52,16 @@ R6="$T/h6"; mkdir -p "$R6"
 node "$ROOT/scripts/diagnose.js" --phase runtime --write-incident --rescue-dir "$R6" --trigger child-exit > "$R6/f.json" 2>"$R6/f.err" || { echo "F threw: $(cat "$R6/f.err")"; fail f-throw; }
 node -e "const o=require('$R6/f.json'); if(o.phase!=='runtime')process.exit(1); if(o.symptom.type!=='healthy-then-crash')process.exit(2); if(o.selfHeal.outcome!=='report-only')process.exit(3); if(o.selfHeal.recommended!=='report-only')process.exit(4); if(o.redline.cordisPatchTouched!==false)process.exit(5);" || { echo "F bad=$(cat "$R6/f.json")"; fail f-incident; }
 grep -q '"phase":"runtime"' "$R6/f.json" || fail f-phase
+# G. 日志里出现带引号的包名、但没有任何"插件失败"模式 -> 不得判为 plugin-related
+#    （PLUGIN_FAIL_PATTERNS 此前定义了却从未参与判定，"是否插件问题"实际只由"日志里有没有
+#     带引号的包名"决定；任何打印过 "@scope/x" 的无关日志都可能触发自动摘插件）
+mkdir -p "$R/evidence/boot-g"
+printf '%s\n' 'config dump: worker "@scope/bad-plugin" started' 'FATAL: disk quota exceeded' > "$R/evidence/boot-g/dsh.stderr.log"
+node "$ROOT/scripts/diagnose.js" --phase boot --evidence "$R/evidence/boot-g" --rescue-dir "$R" > "$R/g.json"
+grep -q '"offendingPlugin":null' "$R/g.json" || { echo "G="$(cat "$R/g.json"); fail g-offender-not-null; }
+if grep -q '"recommendedHeal":"remove-plugin"' "$R/g.json"; then
+  echo "G="$(cat "$R/g.json"); fail g-false-remove-plugin
+fi
+
 echo 'ALL-PASS'
 
