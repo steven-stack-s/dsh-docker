@@ -4,7 +4,10 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [v0.4.0-dsh0.1.5-rc.1] - 2026-09-12
+
+> 本版是一次大范围的自愈体系加固：8 个 P0、12 个 P1 与主要 P2 全部修复，落地 14 个新功能点，
+> 并做了真实 Docker 宿主上的端到端验证（见下方各 Wave 小节与 issues/2026-dsh-docker-v0.3.7-深度评估.md）。
 
 ### Fixed
 - **降级路径不再被 errexit 反噬（P0-1）**：`rescue_supervise()` 内显式 `set +e`，并对 `attempt_evdir`、`rescue_log`、incident 写入逐处容错。此前证据目录建不出来（卷满 / 只读卷 / 权限）时，`ed="$(attempt_evdir)"` 的失败会因 entrypoint 的 `set -e` 直接终止 PID1 —— **dsh 从未被启动**，恰是 rescue 最该救的场景；自愈成功后写 incident 失败也会让本可继续的重试被放弃。新增 `scripts/t/test-supervise-loop.sh` 覆盖三条降级路径。
