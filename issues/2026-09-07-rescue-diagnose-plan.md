@@ -10,7 +10,7 @@
 
 **技术栈：** POSIX sh（dash，禁 bash 专有语法）；node（probe-ready.js 同风格，仅内置 net/fs/path）；cp -al 硬链快照（既有）；docker compose / DSH profile 机制（既有）。
 
-**规格：** docs/superpowers/specs/2026-09-07-dsh-docker-rescue-diagnose.md。执行者先通读该规范。
+**规格：** ../issues/2026-09-07-rescue-diagnose-spec.md（原 docs/superpowers/specs/，已归入 issues/）。执行者先通读该规范。
 
 ## 全局约束
 

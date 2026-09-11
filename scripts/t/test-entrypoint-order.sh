@@ -6,11 +6,11 @@
 # 曾经在 source 之前就调用 rescue_trusted_args / rescue_load_api_key —— `command -v` 判空后静默
 # 跳过，于是"Host 白名单校验""凭据文件"这两项在真机上**完全没生效**，而单测（只测函数本身）全绿。
 #
-# 契约：entrypoint.sh 中所有 rescue_* 调用的行号必须晚于 librescue.sh 被 source 的行号。
+# 契约：scripts/entrypoint.sh 中所有 rescue_* 调用的行号必须晚于 librescue.sh 被 source 的行号。
 # ============================================================================
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-EP="$ROOT/entrypoint.sh"
+EP="$ROOT/scripts/entrypoint.sh"
 [ -f "$EP" ] || { echo "FAIL entrypoint missing"; exit 1; }
 
 src_line=$(grep -n '^[[:space:]]*\.[[:space:]]*/opt/dsh-rescue/librescue.sh' "$EP" | head -n1 | cut -d: -f1)

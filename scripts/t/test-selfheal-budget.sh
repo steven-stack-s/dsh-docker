@@ -54,11 +54,11 @@ grep -q '"windowStart":"' "$state" || fail write-window-start
 grep -q '"removes":1' "$state" || fail write-removes
 
 # ---- 5) CLI status / reset ----
-st=$(sh "$ROOT/rescue" selfheal status) || fail status-rc
+st=$(sh "$ROOT/scripts/rescue" selfheal status) || fail status-rc
 echo "$st" | grep -q 'removes=' || { echo "$st"; fail status-format; }
-sh "$ROOT/rescue" selfheal reset >/dev/null || fail reset-rc
+sh "$ROOT/scripts/rescue" selfheal reset >/dev/null || fail reset-rc
 rescue_budget_read
 [ "$SELFHEAL_REMOVES" = 0 ] || fail reset-not-cleared
-sh "$ROOT/rescue" selfheal >/dev/null 2>&1 && fail unknown-subcommand-must-fail
+sh "$ROOT/scripts/rescue" selfheal >/dev/null 2>&1 && fail unknown-subcommand-must-fail
 
 echo ALL-PASS

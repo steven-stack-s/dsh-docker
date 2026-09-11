@@ -16,7 +16,7 @@ Deploy DeepSeek Harness (DSH) on any Docker environment.
 dsh-docker/
 ├── docker-compose.yml   # deployment config
 ├── Dockerfile           # base image — build it yourself or use the ghcr.io image directly
-├── entrypoint.sh        # container entrypoint
+├── scripts/             # runtime code (entrypoint / rescue CLI / shared library / probes)
 └── .env.example         # environment variable template
 ```
 
@@ -42,7 +42,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-On first boot, `entrypoint.sh` copies dsh+pnpm from the in-image seed (`/opt/dsh-seed`) to the mounted volume `/opt/dsh` — done in seconds, offline, version-pinned (the compose health check uses `start_period: 300s` to cover the first-boot seed copy plus cold start).
+On first boot, `scripts/entrypoint.sh` copies dsh+pnpm from the in-image seed (`/opt/dsh-seed`) to the mounted volume `/opt/dsh` — done in seconds, offline, version-pinned (the compose health check uses `start_period: 300s` to cover the first-boot seed copy plus cold start).
 
 ### 3.3 View Startup Logs
 

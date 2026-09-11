@@ -6,7 +6,7 @@ set -eu
 
 # 定位仓库根（test 位于 scripts/t/ -> 上溯两级）与 rescue 入口
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-RESCUE="$ROOT/rescue"
+RESCUE="$ROOT/scripts/rescue"
 [ -f "$RESCUE" ] || { echo "FAIL rescue not found: $RESCUE"; exit 1; }
 
 T=$(mktemp -d)

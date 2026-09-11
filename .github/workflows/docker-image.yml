@@ -14,7 +14,7 @@
 #   3) 镜像自证：tag 构建后用镜像内 seed 的 dsh --version 断言 == tag 后缀
 #
 # 说明：镜像含运行环境 + dsh/pnpm seed（/opt/dsh-seed），首次启动由 entrypoint
-# 复制到挂载卷 /opt/dsh；日常升级走 docker exec npm install（见 entrypoint.sh）。
+# 复制到挂载卷 /opt/dsh；日常升级走 docker exec npm install（见 scripts/entrypoint.sh）。
 # ============================================================================
 
 name: build-and-push-image
@@ -121,7 +121,7 @@ jobs:
         run: |
           IMG="${TAGS%%,*}"
           # 必须显式 --entrypoint：本镜像的 ENTRYPOINT 是 dsh-entrypoint，镜像名之后的命令只会作为
-          # CMD 追加给它，而 entrypoint.sh 不消费 "$@" —— 那样会照常走 seed/socat 并真的启动 dsh web：
+          # CMD 追加给它，而 scripts/entrypoint.sh 不消费 "$@" —— 那样会照常走 seed/socat 并真的启动 dsh web：
           # 起得来就永不返回，起不来也要等满自愈窗口，两种都会让门禁误红甚至挂死。
           got="$(docker run --rm --platform linux/amd64 --entrypoint /opt/dsh-seed/bin/dsh \
                   "$IMG" --version 2>/tmp/smoke.err | tr -d '[:space:]')"
