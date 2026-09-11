@@ -29,6 +29,8 @@ mk_snap 0006 "2026-09-08T13:00:42+08:00" "selfheal-rollback snap-0005"
 # 1) 编号不得重用空缺：最大号 6 -> 下一个必须是 7（red 阶段会得到 2）
 next=$(next_snap_name)
 [ "$next" = "snap-0007" ] || fail "next-snap-reuse:$next"
+# 抢号现在会真正建出目录（原子性所需），本用例只验证编号，清理掉以免影响后面的排序断言
+rm -rf "$R/snap-0007"
 
 # 2) 「最新/最老」必须按创建时间判定，而非字典序
 newest=$(basename "$(rescue_snapshot_newest)")
@@ -44,5 +46,28 @@ rescue_prune
 ls -1d "$R"/snap-* | xargs -n1 basename | sort > "$T/left"
 printf 'snap-0001\nsnap-0007\n' > "$T/want"
 diff -u "$T/want" "$T/left" > "$T/d" 2>&1 || { cat "$T/d"; fail prune-by-time; }
+
+# 4) meta.created 只有秒级精度：同秒连拍时必须用目录 mtime 作为次键，
+#    否则"最新/最老"会落到字典序（编号）上，prune 可能淘汰好的 baseline、留下现场快照。
+rm -rf "$R"/snap-*
+mk_snap 0011 "2026-01-01T00:00:00+0800" "tie-later"
+mk_snap 0012 "2026-01-01T00:00:00+0800" "tie-earlier"
+touch -t 202601010000.05 "$R/snap-0011"    # 实际更晚
+touch -t 202601010000.01 "$R/snap-0012"    # 实际更早
+n2=$(basename "$(rescue_snapshot_newest)")
+o2=$(basename "$(rescue_snapshot_oldest)")
+[ "$n2" = "snap-0011" ] || fail "same-second-newest-by-mtime:$n2"
+[ "$o2" = "snap-0012" ] || fail "same-second-oldest-by-mtime:$o2"
+
+# 5) 编号分配必须原子：两次调用不得给出同一个名字
+#    （并发场景：entrypoint 的健康基线快照 与 用户 rescue plugin add 的预防性快照 会同时发生；
+#     旧的"读最大号 -> +1 -> 返回"是 check-then-act，两边会选中同一个 snap-XXXX，
+#     然后互相覆盖/报 File exists，meta 还可能丢失导致时间序判定退化）
+rm -rf "$R"/snap-*
+a=$(next_snap_name)
+b=$(next_snap_name)
+[ "$a" = "snap-0001" ] || fail "atomic-first-name:$a"
+[ "$b" = "snap-0002" ] || fail "atomic-second-name:$b"
+[ "$a" != "$b" ] || fail atomic-collision
 
 echo 'ALL-PASS'
