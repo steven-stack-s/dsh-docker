@@ -66,7 +66,12 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 ├── docs/
 │   ├── en/                   # English docs
 │   └── zh-CN/                # 简体中文文档
+├── scripts/t/                # tests: unit tests + host-side end-to-end acceptance scripts
 └── .github/workflows/        # CI: build image and publish to ghcr.io
+
+> Running `scripts/t/test-*.sh` requires **node on the host** (6 of them invoke Node scripts such as
+> diagnose.js / report.js / probe-ready.js; ubuntu-latest in CI ships it — on a bare shell host install
+> node first, or run them with the node inside the container).
 ```
 
 ---
@@ -96,7 +101,7 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 
 ## 🏷️ Releases
 
-Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh<dsh-version>` (e.g. `v0.3.0-dsh0.1.2-rc.1`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
+Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh<dsh-version>` (e.g. `v0.3.7-dsh0.1.5-rc.1`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
 
 > To run a **pinned** dsh version, set `DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<project-version>-dsh<dsh-version>` in `.env` (its seed matches that exact dsh version). The default `:latest` is rebuilt on every tag push and tracks the newest published version — it is not a fixed build.
 

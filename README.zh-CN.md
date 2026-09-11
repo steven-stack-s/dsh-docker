@@ -67,7 +67,11 @@ docker compose up -d
 ├── docs/
 │   ├── en/                   # English docs
 │   └── zh-CN/                # 简体中文文档
+├── scripts/t/                # 测试：单元测试 + 宿主机端到端验收脚本
 └── .github/workflows/        # CI：自动构建镜像发布到 ghcr.io
+
+> 跑 `scripts/t/test-*.sh` 需要**宿主有 node**（其中 6 个会调用 diagnose.js / report.js / probe-ready.js
+> 等 Node 脚本；CI 的 ubuntu-latest 自带，纯 shell 环境的宿主请先装 node，或直接用容器内的 node）。
 ```
 
 ---
@@ -98,7 +102,7 @@ docker compose up -d
 
 ## 🏷️ 版本
 
-发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh<dsh版本>`（如 `v0.3.0-dsh0.1.2-rc.1`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
+发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh<dsh版本>`（如 `v0.3.7-dsh0.1.5-rc.1`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
 
 ---
 

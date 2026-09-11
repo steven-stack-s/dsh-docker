@@ -42,7 +42,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-On first boot, `entrypoint.sh` copies dsh+pnpm from the in-image seed (`/opt/dsh-seed`) to the mounted volume `/opt/dsh` — done in seconds, offline, version-pinned (the health check `start_period` is now shortened to 60s).
+On first boot, `entrypoint.sh` copies dsh+pnpm from the in-image seed (`/opt/dsh-seed`) to the mounted volume `/opt/dsh` — done in seconds, offline, version-pinned (the compose health check uses `start_period: 300s` to cover the first-boot seed copy plus cold start).
 
 ### 3.3 View Startup Logs
 
@@ -53,11 +53,11 @@ docker logs dsh --tail 15
 Expected output:
 
 ```
-[entrypoint] 首次启动：准备 @deepseek-ai/dsh 到挂载卷 /opt/dsh ...
-[entrypoint]   从镜像内 seed (/opt/dsh-seed) 复制到 /opt/dsh
-[entrypoint] DSH 已就绪: /opt/dsh/bin/dsh
-[entrypoint] 启动 socat 转发: 0.0.0.0:3080 -> 127.0.0.1:3081
-[entrypoint] 启动 dsh web (内部 127.0.0.1:3081)
+[entrypoint] first boot: seeding @deepseek-ai/dsh into mounted volume /opt/dsh ...
+[entrypoint]   copying in-image seed (/opt/dsh-seed) to /opt/dsh
+[entrypoint] dsh ready: /opt/dsh/bin/dsh
+[entrypoint] starting socat forward: 0.0.0.0:3080 -> 127.0.0.1:3081 (max-children=64)
+[entrypoint] starting dsh web (internal 127.0.0.1:3081)
 dsh web: http://127.0.0.1:3081/?token=xxxxxxxx   # ← the launch token, printed on the "dsh web:" line
 ```
 

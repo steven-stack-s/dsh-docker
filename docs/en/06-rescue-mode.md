@@ -18,8 +18,13 @@ This repo persists DSH in two parts:
 | Layer | Purpose | Trigger |
 |---|---|---|
 | Layer 0 · wrapped commands | `rescue plugin` auto-snapshots the current plugin tree; `rescue dsh-upgrade` records the last-good main-program version | run the wrapped command manually |
-| Layer 1 · entrypoint auto-rollback | auto-rollback to the last known-good snapshot and retry after a failed boot | on by default (RESCUE_AUTO=on) |
-| Layer 2 · lifeboat | when rollback budget is exhausted, boot a clean minimal profile as a usable entry point | RESCUE=1 manually / automatic fallback |
+| Layer 1 · entrypoint auto-diagnose + rollback | attribute the failure with deterministic rules, then roll back to the pre-change baseline or remove the offending plugin, and retry | on by default (needs **both** `RESCUE_AUTO=on` and `RESCUE_SELFHEAL=on`) |
+| Layer 2 · lifeboat | when every automatic measure fails, boot a clean minimal profile as a usable entry point | **manual** `RESCUE=1` (there is no automatic fallback today — see the note below) |
+
+> Note: **"automatic fallback into the lifeboat" is not implemented** (earlier revisions of this table said
+> "automatic fallback", which did not match the code). When automatic measures and the budget are exhausted the
+> entrypoint exits and `restart: unless-stopped` retries; to enter the lifeboat, set `RESCUE=1` in `.env` and run
+> `docker compose up -d` (see §5).
 
 ## 2. Enabling
 
@@ -36,13 +41,21 @@ Relevant environment variables (`.env`; inside the container, inspect with `dock
 | Variable | Default | Meaning |
 |---|---|---|
 | RESCUE | 0 | 0=normal; 1=lifeboat boot (see §5) |
-| RESCUE_AUTO | on | on=auto-rollback on boot failure; off=disable |
+| RESCUE_AUTO | on | **master switch for automatic intervention**: on=attribute and roll back / remove plugins on failure; off=diagnose + write incident only, never touch the plugin tree |
 | RESCUE_START_TIMEOUT | 120 | readiness-probe timeout in seconds |
-| RESCUE_KEEP | 3 | how many recent snapshots to keep |
+| RESCUE_KEEP | 3 | how many recent **snapshots** to keep |
+| RESCUE_MAX_ATTEMPTS | KEEP+1 | boot retry cap (decoupled from the snapshot count; defaults to `RESCUE_KEEP+1`) |
+| RESCUE_EVIDENCE_KEEP | KEEP | how many `evidence/boot-*` directories to keep (defaults to `RESCUE_KEEP`) |
 | RESCUE_PROFILE | web | target profile for rollback / plugin ops |
 | RESCUE_SELFHEAL | on | on=auto remove-plugin / rollback on boot failure; off=diagnose + incident + report only |
-| RESCUE_REMOVE_LIMIT | 2 | max auto plugin-removals per container lifetime (over -> report-only) |
-| RESCUE_ROLLBACK_LIMIT | 2 | max auto snapshot-rollbacks per container lifetime |
+| RESCUE_REMOVE_LIMIT | 2 | max auto plugin-removals within the window (over -> report-only) |
+| RESCUE_ROLLBACK_LIMIT | 2 | max auto snapshot-rollbacks within the window |
+| RESCUE_SELFHEAL_WINDOW | 86400 | sliding window (seconds) for the self-heal budget; it auto-resets when the window expires so the budget can never be exhausted forever |
+| RESCUE_SNAPSHOT_ON_HEALTHY | on | take a baseline snapshot once a boot is confirmed healthy (rollback point for changes that bypass the rescue wrappers) |
+| RESCUE_SNAPSHOT_MODE | hardlink | `hardlink`=`cp -al` (cheap, shares inodes with live, pollution detected by `rescue verify`); `copy`=`cp -a` immutable copy |
+| RESCUE_AUTO_LIFEBOAT | on | boot the clean lifeboat profile after self-heal is exhausted (one-shot marker, applied on the next start) |
+| SOCAT_MAX_CHILDREN | 64 | concurrent connection cap for the socat forwarder (fork-per-connection) |
+| DEEPSEEK_API_KEY_FILE | (empty) | read the model key from a file (docker secret / mounted file) instead of the environment, so it never shows up in `docker inspect` |
 | RESCUE_DIAGNOSE_EVIDENCE | on | tee each dsh boot output to `$DSH_HOME/.rescue/evidence/` for attribution |
 | RESCUE_INCIDENT_KEEP | 20 | how many incidents to keep under `$DSH_HOME/.rescue/incidents/` |
 
@@ -57,7 +70,15 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 | `docker exec dsh rescue doctor` | Read-only diagnostics: profile dir + package.json, snapshot list |
 | `docker exec dsh rescue plugin add <pkg>` | Auto-snapshot first, then run `dsh plugin --profile web add <pkg>` (leave a rollback point before installing) |
 | `docker exec dsh rescue plugin remove <pkg>` | Same, to uninstall a plugin |
-| `docker exec dsh rescue rollback` | Manually roll back to the newest snapshot (prints a hint; then `docker restart dsh`) |
+| `docker exec dsh rescue snapshots` | Snapshot inventory: name / created / mode / **whether it differs from the live tree** / reason |
+| `docker exec dsh rescue verify [snap]` | Integrity check: the node_modules tree hash recorded in meta vs recomputed (detects snapshots silently rewritten in place); no argument = check all |
+| `docker exec dsh rescue rollback` | Manual rollback; **skips snapshots identical to the live tree** (the "broken scene" snapshots self-heal takes), then `docker restart dsh` |
+| `docker exec dsh rescue rollback --to <snap>` | Explicit target; refuses a target identical to live instead of pretending to restore |
+| `docker exec dsh rescue rollback --dry-run` | Print which snapshot would be restored; changes nothing |
+| `docker exec dsh rescue selfheal status` | Show the self-heal gate and remaining budget (how many removes/rollbacks used, when the window resets) |
+| `docker exec dsh rescue selfheal reset` | Clear the self-heal budget and restore self-heal capability immediately |
+| `docker exec dsh rescue export [path]` | Pack everything needed for troubleshooting (incidents / state / snapshot meta / environment summary / doctor / tail of the last boot log) into one tar.gz; never includes the plugin tree, sessions, memory or any secret |
+| `docker exec dsh rescue lifeboat on\|off\|status` | Request / clear / inspect the "boot the lifeboat on next start" marker (set automatically when self-heal is exhausted) |
 | `docker exec dsh rescue dsh-upgrade <version>` | Record the current DSH version as last-good, then upgrade the program to the given version |
 | `docker exec dsh rescue dsh-reinstall` | Reinstall the program at the recorded last-good version (lightweight fallback for program incidents) |
 | `docker exec dsh rescue lifeboat` | Print instructions to switch to lifeboat (equivalent to RESCUE=1) |
@@ -77,10 +98,11 @@ On restart the entrypoint starts dsh web as a **child process** and runs a **lay
 
 Rollback flow:
 
-1. Boot failed → if `RESCUE_AUTO=on` **and** a snapshot exists **and** attempts remain:
-2. Take the newest snapshot and check its fingerprint differs from the live plugin tree (fingerprint = hash of package.json + pnpm-lock.yaml);
-3. If different, roll the plugin tree (package.json / pnpm-lock.yaml / pnpm-workspace.yaml / node_modules) back to that snapshot and **retry** (up to `RESCUE_KEEP+1` times);
-4. No rollback available / budget exhausted and still failing → go to **lifeboat** (§5), or exit and let `restart: unless-stopped` take over.
+1. Boot failed → `diagnose.js` attributes it with deterministic rules (§4b) and recommends `remove-plugin` / `rollback` / `report-only`;
+2. **Before any self-heal action** the master switch is checked: `RESCUE_AUTO` and `RESCUE_SELFHEAL` must **both** be `on`, otherwise it only writes an incident (report-only);
+3. `rollback` restores the plugin tree (package.json / pnpm-lock.yaml / pnpm-workspace.yaml / node_modules) to the target snapshot and **retries** (up to `RESCUE_KEEP+1` times);
+4. Without diagnose capability / evidence it falls back to the legacy path: with `RESCUE_AUTO=on`, a snapshot present and its fingerprint differing from live (fingerprint = hash of package.json + pnpm-lock.yaml), roll back to the newest snapshot;
+5. Every automatic measure failed / budget exhausted → exit and let `restart: unless-stopped` retry; a human must enter the lifeboat with `RESCUE=1` (§5).
 
 After a healthy boot the entrypoint keeps waiting on dsh; if dsh later crashes the container exits and Docker's restart policy takes over. To see whether a rollback happened:
 
@@ -92,11 +114,13 @@ docker logs dsh --tail 100 | grep -iE 'rollback|healthy|rescue'
 
 ```bash
 tail -20 /data/dsh/.rescue/log/rescue.log      # inside the container
-# e.g. 2026-09-07T15:35:24+0800 restore done snap-0002
-#      2026-09-07T17:12:00+0800 auto-rollback start -> snap-0001
-#      2026-09-07T17:12:03+0800 auto-rollback done -> snap-0001
-#      2026-09-07T17:12:10+0800 lifeboat enter: rollback FAILED
-#      2026-09-07T17:13:00+0800 boot exhausted, no rollback available; exit for docker restart policy
+# e.g. 2026-09-07T17:12:00+0800 snapshot created snap-0001 (reason: plugin add @scope/x)
+#      2026-09-07T17:12:05+0800 selfheal rollback to snap-0001      # this line is in docker logs (elog)
+#      2026-09-07T17:12:05+0800 restore apply snap-0001 -> /data/dsh/profiles/web
+#      2026-09-07T17:12:08+0800 restore done snap-0001
+#      2026-09-07T17:12:08+0800 selfheal rollback ok: snap-0001
+#      2026-09-07T17:12:30+0800 baseline snapshot on healthy: snap-0002
+#      2026-09-07T17:13:00+0800 boot exhausted; exit for docker restart policy
 ```
 
 `rescue status` shows the same file's tail as its “last event log”.
@@ -112,7 +136,8 @@ On top of auto-rollback, the entrypoint provides an **evidence-driven diagnosis 
 
 **Self-heal guardrails** (anti-infinite / anti-collateral):
 
-- Budget in `state/selfheal.json`: per container lifetime auto plugin-removals ≤ `RESCUE_REMOVE_LIMIT` and snapshot-rollbacks ≤ `RESCUE_ROLLBACK_LIMIT`; over the limit → report-only.
+- Budget in `state/selfheal.json`: **within the window**, auto plugin-removals ≤ `RESCUE_REMOVE_LIMIT` and snapshot-rollbacks ≤ `RESCUE_ROLLBACK_LIMIT`; over the limit → report-only. The window (`RESCUE_SELFHEAL_WINDOW`, default 24h) expires automatically and resets the counters, so the budget can never be exhausted forever. Use `rescue selfheal status` to inspect and `rescue selfheal reset` to clear it.
+- Rollback targets must be meaningful: snapshots whose fingerprint equals the live tree (typically the "broken scene" taken just before) are skipped — otherwise a rollback changes nothing yet is recorded as `rollback ok` and burns budget.
 - Conservative attribution (report rather than wrong-remove): `remove-plugin` only when evidence matches a plugin failure and the offender is the most-recent add; otherwise prefer rollback or report-only.
 - A scene snapshot is taken before every self-heal action; all actions go to `rescue.log` and update the matching incident.
 - With `RESCUE_SELFHEAL=off`, only diagnose + write incident + hint — never auto-change.
@@ -125,7 +150,7 @@ On top of auto-rollback, the entrypoint provides an **evidence-driven diagnosis 
 
 Review one incident: `docker exec dsh rescue report <id>`; the output includes `rootCause.rationale` (why it judged so) and `redline.cordisPatchTouched=false` (asserts cordis.patch.yml was not touched this round).
 
-> Calibration note: the log patterns used for attribution are the top-of-file data constants `PLUGIN_FAIL_PATTERNS` in `/opt/dsh-rescue/diagnose.js`. If a real failure is missed and misjudged as report-only, review the evidence via `docker exec dsh rescue report <id>` on the host and tune the patterns once.
+> Calibration note: the log patterns used for attribution are the top-of-file data constants `PLUGIN_FAIL_PATTERNS` in `/opt/dsh-rescue/diagnose.js`. The order is "**first** match the plugin-failure patterns, **then** extract the offending package name" — so an unrelated log line that merely mentions a package name is not mistaken for a plugin failure.
 
 ## 5. Lifeboat
 
@@ -153,7 +178,7 @@ docker compose up -d
 
 ## 6. Disabling / Backup Tips
 
-**Disable auto-rollback**: set `RESCUE_AUTO=off` in `.env` then `docker compose up -d`. After that, a boot failure won't roll back; it exits and `restart: unless-stopped` retries repeatedly — we recommend leaving it on.
+**Disable automatic intervention**: set `RESCUE_AUTO=off` (or `RESCUE_SELFHEAL=off`) in `.env` then `docker compose up -d`. With **either** of them off, a boot failure only diagnoses and writes an incident — it **never modifies the plugin tree** — then exits and `restart: unless-stopped` retries. Temporarily turning it off is recommended while troubleshooting plugins.
 
 **Disable rescue mode entirely**: the wrapped commands are manual tools and can't be turned off; setting `RESCUE_AUTO=off` + `RESCUE=0` gives you the plain “no auto-intervention” deployment.
 
@@ -161,5 +186,5 @@ docker compose up -d
 
 ## 7. Troubleshooting Entry Points
 
-- Container won't start / repeated crashloop → first check `docker logs dsh --tail 100` for `rolling back` / `lifeboat` markers, then follow《[04 · Troubleshooting](04-troubleshooting.md)》.
+- Container won't start / repeated crashloop → first check `docker logs dsh --tail 100` for `selfheal rollback to` / `no-evidence fallback: rollback to` / `booting clean lifeboat profile` markers, then inspect attribution with `docker exec dsh rescue report` and follow《[04 · Troubleshooting](04-troubleshooting.md)》.
 - To end-to-end accept the rescue chain on a real Docker host → run the in-repo script `scripts/t/e2e-rescue-on-host.sh` (it briefly restarts the dsh container; see the header comments).

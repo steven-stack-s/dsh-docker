@@ -11,7 +11,7 @@
 | `crypto.randomUUID is not a function` | Accessing from a non-HTTPS / non-localhost origin (browser secure context) | Use `localhost`, an SSH tunnel, or a reverse proxy with HTTPS (see [02](02-authentication-remote-access.md)) |
 | Copying from the seed on first boot is slow | Windows + WSL bind mount crosses filesystems | Seconds on Linux; on Windows, use a docker named volume or wait for the first copy |
 | `docker compose up` reports `DEEPSEEK_API_KEY` not set | `.env` is not configured | Run `cp .env.example .env` and fill in the key |
-| Container won't start / repeated crashloop | Broken plugin fails to boot; auto-rollback didn't fire (no snapshot / RESCUE_AUTO=off / rescue tooling not installed) | Check the logs for `rolling back` / `lifeboat` markers; rebuild the image or use the [06 · Rescue Mode](06-rescue-mode.md) lifeboat to remove the bad plugin |
+| Container won't start / repeated crashloop | Broken plugin fails to boot; auto-rollback didn't fire (no snapshot / RESCUE_AUTO=off / RESCUE_SELFHEAL=off / rescue tooling not installed) | Check the logs for `selfheal rollback to` / `no-evidence fallback: rollback to` / `booting clean lifeboat profile` markers, then inspect attribution with `docker exec dsh rescue report`; rebuild the image or enter the lifeboat with `RESCUE=1` to remove the bad plugin (see [06 · Rescue Mode](06-rescue-mode.md)) |
 
 ## Configure models with curl on the host
 
@@ -46,7 +46,7 @@ docker exec dsh rescue incident list
 tail -30 /data/dsh/.rescue/log/rescue.log                                     # audit log (in the volume, browsable offline)
 ```
 
-> Red line: auto-diagnosis only reads evidence and only touches the four plugin-tree files plus `.rescue` state. If a report ever shows `redline.cordisPatchTouched=true` (should not happen) or recovery is still impossible, enter the lifeboat with `RESCUE=1` and fix manually (see 06 · Rescue Mode).
+> Redline note: the automated diagnosis only reads evidence and only touches the four plugin-tree files plus `.rescue` state. `redline.cordisPatchTouched` is guaranteed `false` by construction; a `true` means some code crossed the redline — stop and intervene manually, and if recovery still fails, enter the lifeboat with `RESCUE=1` (see 06-rescue-mode).
 
 **Reading the outcome:** `report-only` = auto-attribution found no plugin cause / no baseline, no auto change — needs a human; `recovered-remove` / `recovered-rollback` = recovered by auto-removing a plugin or rolling back a snapshot. If `rootCause.category=unknown` and it keeps returning report-only, it is usually a non-plugin issue (program / upgrade / resources) — see 03-upgrade-maintenance for the `dsh-reinstall` fallback.
 
