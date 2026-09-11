@@ -20,6 +20,10 @@ on:
         description: '要处理的 tag（留空则补齐所有尚无 Release 的 tag）'
         required: false
         default: ''
+  # 本文件自身被修改并推送时也跑一次（幂等）：新建或调整补建逻辑后不必再手动点一次。
+  push:
+    paths:
+      - '.github/workflows/create-release.yml'
 
 jobs:
   release:
