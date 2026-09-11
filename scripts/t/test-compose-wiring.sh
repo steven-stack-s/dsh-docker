@@ -38,6 +38,14 @@ if(!bad) console.log("  injection + .env.example: OK");
 process.exit(bad);
 ' "$ROOT" || fail compose-injection-drift
 
+# 1b) Dockerfile 的 COPY 源必须存在：目录重构（移动 entrypoint.sh / rescue / lifeboat.tmpl）最容易
+#     在这里改漏，而构建失败只有在真机 build 时才会暴露。
+missing_copy=0
+for src in $(awk '/^COPY /{ for (i = 2; i < NF; i++) print $i }' "$ROOT/Dockerfile"); do
+  [ -e "$ROOT/$src" ] || { echo "FAIL dockerfile-copy-source-missing: $src"; missing_copy=1; }
+done
+[ "$missing_copy" -eq 0 ] || exit 1
+
 # 2) 容器硬化必须在位（LAN 内任何能访问 3080 的人都能借 agent 以 root 执行）
 grep -q 'no-new-privileges' "$COMPOSE" || fail hardening-missing-no-new-privileges
 grep -q 'pids_limit' "$COMPOSE" || fail hardening-missing-pids-limit
