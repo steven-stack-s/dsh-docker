@@ -53,9 +53,13 @@ services:
       - DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-}
       # 救生舱（lifeboat）开关：RESCUE=1 时 entrypoint 进救生舱（回退到固定 dsh 版本）
       - RESCUE=${RESCUE:-0}
+      # 自动干预总闸：off = 只诊断不自动改动插件树（与 RESCUE_SELFHEAL 取与）
       - RESCUE_AUTO=${RESCUE_AUTO:-on}
       - RESCUE_START_TIMEOUT=${RESCUE_START_TIMEOUT:-120}
       - RESCUE_KEEP=${RESCUE_KEEP:-3}
+      # 启动重试上限（默认 KEEP+1，可独立配置）与证据目录保留份数（默认跟随 KEEP）
+      - RESCUE_MAX_ATTEMPTS=${RESCUE_MAX_ATTEMPTS:-4}
+      - RESCUE_EVIDENCE_KEEP=${RESCUE_EVIDENCE_KEEP:-3}
       - RESCUE_PROFILE=${RESCUE_PROFILE:-web}
       # 自动排查·根因归因·智能自愈（红线：仅动插件树四件套，绝不动 cordis.patch.yml/会话/记忆/配置/凭据）
       - RESCUE_SELFHEAL=${RESCUE_SELFHEAL:-on}
@@ -64,6 +68,18 @@ services:
       - RESCUE_DIAGNOSE_EVIDENCE=${RESCUE_DIAGNOSE_EVIDENCE:-on}
       - RESCUE_EVIDENCE_MAX=${RESCUE_EVIDENCE_MAX:-20971520}
       - RESCUE_INCIDENT_KEEP=${RESCUE_INCIDENT_KEEP:-20}
+      # 健康后自动拍基线快照（off=关）；此前未透传，compose 部署下无法关闭
+      - RESCUE_SNAPSHOT_ON_HEALTHY=${RESCUE_SNAPSHOT_ON_HEALTHY:-on}
+      # 快照模式：hardlink=cp -al（省空间，但与 live 共享 inode）；copy=cp -a（独立不可变副本）
+      - RESCUE_SNAPSHOT_MODE=${RESCUE_SNAPSHOT_MODE:-hardlink}
+      # 自愈预算的滑动窗口（秒）：窗口过期自动清零，避免预算永久耗尽后自愈静默失效
+      - RESCUE_SELFHEAL_WINDOW=${RESCUE_SELFHEAL_WINDOW:-86400}
+      # 自愈彻底失败后自动进救生舱（off=只退出，交给 restart 策略）
+      - RESCUE_AUTO_LIFEBOAT=${RESCUE_AUTO_LIFEBOAT:-on}
+      # socat 并发上限：fork 模式每连接一个进程，无上限时外部并发连接可耗尽容器内存
+      - SOCAT_MAX_CHILDREN=${SOCAT_MAX_CHILDREN:-64}
+      # 凭据文件（docker secret / 挂载文件）：优先于 DEEPSEEK_API_KEY 环境变量
+      - DEEPSEEK_API_KEY_FILE=${DEEPSEEK_API_KEY_FILE:-}
 
     volumes:
       # DSH 程序本体（npm 全局包 + dsh/pnpm 命令）——升级与插件管理写入这里
@@ -80,6 +96,15 @@ services:
     # 资源限制（按宿主机配置调整；N100 + 8GB 示例给系统留余量）
     mem_limit: ${MEM_LIMIT:-2g}
     cpus: ${CPU_LIMIT:-2}
+    # 进程数上限：socat 每连接 fork 一个进程，无上限时并发连接可拖垮容器
+    pids_limit: ${PIDS_LIMIT:-512}
+
+    # 容器硬化：禁止进程通过 setuid/setgid 提权（LAN 内任何能访问 3080 的人都能借 agent
+    # 以 root 执行，这是低成本的第一道保险）。需要更严格时再按需加：
+    #   cap_drop: [ALL]        # 部分 NAS/内核组合下可能影响卷权限，请先在测试环境验证
+    #   read_only: true        # 需同时挂 tmpfs 到 /tmp
+    security_opt:
+      - no-new-privileges:true
 
     healthcheck:
       # 与 rescue 同判据（都连 127.0.0.1:3081）；此 healthcheck 覆盖 Dockerfile 内的值。

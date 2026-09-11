@@ -25,8 +25,14 @@
 #     - 每 ~10s 抓一次 docker logs（--since 起始标记，排除 restart 前的旧 healthy 行）
 #     - 累计最长等待 = RESCUE_START_TIMEOUT + 40s（可用 E2E_MAX_WAIT_SECS 覆盖）
 #     - 同时观察到回滚标记 + 健康标记 → PASS；到点未见 → FAIL 并打印尾部日志供人工核对
-#   回滚/健康日志的精确措辞只在真实容器内核对（无法在本沙箱预判），故 grep 用宽松集合：
-#     rollback | restored | healthy | rescue
+#   判定锚定 entrypoint 的**成功原文**，不用宽松集合：
+#     - 健康 = '[entrypoint] dsh healthy on 127.0.0.1:'（rescue-supervise.sh 的成功行）
+#     - 回滚 = '[entrypoint] selfheal rollback' / '[entrypoint] no-evidence fallback' / 'restore apply|done'
+#   历史教训：早期用 grep -iE "healthy|listening"，而探针**失败**时会打印
+#   '[probe] L1 tcp: not listening yet'，于是"首次尝试失败 + 发生回滚"就能凑齐两个条件、
+#   打印 PASS —— 服务其实没恢复（假绿）。锚定后该误判不可能发生。
+#   注：若 diagnose 判定的是 remove-plugin（而非 rollback），本脚本的"回滚标记"不会出现；
+#   该路径的验收见 e2e-rescue-diagnose-on-host.sh 的 A 段。
 #
 # 退出码：0 = PASS（观察到回滚 + 恢复健康）；1 = FAIL/异常
 # ============================================================================
@@ -94,7 +100,7 @@ log '== 4) 重启，轮询观察 entrypoint 是否自动回滚并恢复 =='
 docker restart "$CONTAINER"
 
 # 有界轮询：自动回滚只在 RESCUE_START_TIMEOUT 探测超时后才发生（见文件头定时说明）。
-# 回滚/健康日志措辞只在真实容器内核对，故用宽松集合 grep。
+# 判定锚定 entrypoint 成功原文（见文件头"判定锚定"说明）：宽松 grep 会被探针失败行欺骗。
 rollback_seen=0
 healthy_seen=0
 elapsed=0
@@ -102,15 +108,17 @@ while [ "$elapsed" -lt "$max_wait" ]; do
   sleep "$POLL_INTERVAL"
   elapsed="$((elapsed + POLL_INTERVAL))"
   logs="$(docker logs "$CONTAINER" --since "$start_mark" --tail 200 2>/dev/null || true)"
-  if [ "$rollback_seen" -eq 0 ] && echo "$logs" | grep -qiE "rollback|restored|rolling back"; then
+  if [ "$rollback_seen" -eq 0 ] && echo "$logs" | grep -qE '\[entrypoint\] (selfheal rollback|no-evidence fallback)|restore (apply|done)'; then
     rollback_seen=1
     log "检测到【回滚】标记（restart 后约 ${elapsed}s）："
-    echo "$logs" | grep -iE "rollback|restored|rolling back" | tail -n3 | sed 's/^/    /' || true
+    echo "$logs" | grep -E '\[entrypoint\] (selfheal rollback|no-evidence fallback)|restore (apply|done)' | tail -n3 | sed 's/^/    /' || true
   fi
-  if [ "$healthy_seen" -eq 0 ] && echo "$logs" | grep -qiE "healthy|listening"; then
+  # 健康必须锚定 entrypoint 的成功原文：[probe] 的失败行含 "not listening yet"，
+  # 用 "healthy|listening" 宽松匹配会把"探测失败"误判成"已恢复健康"（假绿）。
+  if [ "$healthy_seen" -eq 0 ] && echo "$logs" | grep -qF '[entrypoint] dsh healthy on 127.0.0.1:'; then
     healthy_seen=1
     log "检测到【健康/恢复】标记（restart 后约 ${elapsed}s）："
-    echo "$logs" | grep -iE "healthy|listening" | tail -n3 | sed 's/^/    /' || true
+    echo "$logs" | grep -F '[entrypoint] dsh healthy on 127.0.0.1:' | tail -n3 | sed 's/^/    /' || true
   fi
   if [ "$rollback_seen" -eq 1 ] && [ "$healthy_seen" -eq 1 ]; then
     log "轮询中止：回滚与健康均已观察到（${elapsed}s）"

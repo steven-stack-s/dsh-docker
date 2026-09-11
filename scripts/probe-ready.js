@@ -14,6 +14,13 @@
 // 永久判为不健康并触发回滚死循环。故 L2 只证明「HTTP 栈真的能应答」，而不是只完成了
 // TCP 握手：只有连上了却拿不到任何 HTTP 响应（超时/连接重置）才算失败。
 //
+// 关于 L4（客户端激活层）：L2 故意不看正文，但"插件树激活失败"恰恰是进程健康、端口在听、
+// HTTP 也返回 200+HTML、只有浏览器里白屏的故障 —— v0.3.7 的 CHANGELOG 明确承认探针覆盖不到它。
+// 这里补一步低风险的正文模式匹配：dsh 正常返回的 HTML 里不含任何启动失败标记（实测 14.7KB 的
+// 正常 shell 连 "booting" 都没有），因此只在出现 "Failed to load plugins" /
+// "N entries did not activate" 这类明确失败文案时才判不健康。
+// 极端部署若服务端 HTML 恒含类似字样，可用 RESCUE_PROBE_FAIL_CHECK=off 整体关闭该检查。
+//
 // 用法: node probe-ready.js <port> [timeoutMs] [--pid <pid>] [--stable <n>] [--quiet]
 //   --pid <pid>    该进程一消失即立即判失败（可选；不传则与改造前行为一致，
 //                  即一直轮询到超时）。用于把「启动后立刻崩溃」的失败检测从
@@ -28,6 +35,13 @@ const HOST = '127.0.0.1';
 const IO_TIMEOUT_MS = 3000; // 单次 TCP/HTTP 尝试的上限，避免任何一次挂起拖死整个探测
 const RETRY_MS = 1000; // 失败后的重试间隔
 const STABLE_MS = 400; // 已达成就绪层、只差连续确认时的间隔
+const BODY_READ_MAX = 262144; // L4 最多读 256KB 正文，超限即断开，绝不因为读正文把探测拖住
+const FAIL_BODY_PATTERNS = [
+  /Failed to load plugins/i,
+  /did not activate/i,
+  /dsh-boot-(error|failed)/i,
+];
+const failCheckEnabled = () => (process.env.RESCUE_PROBE_FAIL_CHECK || 'on') !== 'off';
 
 function parseArgs(argv) {
   const out = { port: 0, timeoutMs: 120000, pid: 0, stable: 2, quiet: false };
@@ -97,15 +111,26 @@ function httpOnce() {
     const req = http.request(
       { host: HOST, port: opts.port, path: '/', method: 'GET', timeout: IO_TIMEOUT_MS },
       (res) => {
-        res.resume(); // 丢弃正文，避免占住连接
-        resolve(true); // 任何状态码都算 HTTP 栈就绪
+        let body = '';
+        let seen = 0;
+        res.on('data', (chunk) => {
+          seen += chunk.length;
+          if (seen > BODY_READ_MAX) {
+            res.destroy(); // 正文够判断了，别为了读完拖住探测
+            resolve({ ok: true, body });
+            return;
+          }
+          body += chunk;
+        });
+        res.on('end', () => resolve({ ok: true, body })); // 任何状态码都算 HTTP 栈就绪
+        res.on('error', () => resolve({ ok: true, body }));
       },
     );
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve({ ok: false, body: '' });
     });
-    req.on('error', () => resolve(false));
+    req.on('error', () => resolve({ ok: false, body: '' }));
     req.end();
   });
 }
@@ -117,13 +142,23 @@ async function tick() {
     note('L1 tcp: not listening yet');
     return 'retry';
   }
-  if (!(await httpOnce())) {
+  const h = await httpOnce();
+  if (!h.ok) {
     consecutive = 0;
     note('L2 http: tcp up but no HTTP response yet');
     return 'retry';
   }
+  // L4：端口与 HTTP 栈都正常，但正文里出现"插件树没激活"的明确失败文案
+  if (failCheckEnabled()) {
+    const hit = FAIL_BODY_PATTERNS.find((re) => re.test(h.body));
+    if (hit) {
+      consecutive = 0;
+      note(`L4 boot-failure marker in response body (${hit}): the port and HTTP stack are fine but the plugin tree did not activate`);
+      return 'retry';
+    }
+  }
   consecutive += 1;
-  note(`L1 tcp ok, L2 http ok (${consecutive}/${opts.stable})`);
+  note(`L1 tcp ok, L2 http ok, L4 body clean (${consecutive}/${opts.stable})`);
   return consecutive >= opts.stable ? 'ready' : 'retry';
 }
 
