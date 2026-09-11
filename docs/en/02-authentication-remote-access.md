@@ -68,6 +68,11 @@ Works wherever Windows/Mac/Linux ship with a built-in `ssh` — no extra configu
 
 ## 4. Reverse Proxy + HTTPS (Long-Term Remote Access, Recommended)
 
+> ⚠ **Add the domain to `DSH_TRUSTED_HOSTS`**: dsh only trusts loopback or allow-listed Hosts. If you
+> access it by domain without allow-listing it, the page loads but `/api` is rejected with 403 (which looks
+> like a blank UI / broken connection). Put this in `.env`: `DSH_TRUSTED_HOSTS=app.example.com`
+> (comma-separated, ports allowed).
+
 Using Caddy (automatic HTTPS) as an example; Nginx works the same way:
 
 ```bash

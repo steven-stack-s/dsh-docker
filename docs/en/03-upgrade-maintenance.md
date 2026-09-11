@@ -11,6 +11,14 @@ docker exec dsh npm install -g @deepseek-ai/dsh@<新版本>
 docker restart dsh
 ```
 
+> ⚠ **Back up first** (see §5): a cross-major upgrade can include an **irreversible** data-format change —
+> for example `0.1.2-rc.1 → 0.1.5-rc.1` migrates sessions to V3, after which the **old version can no
+> longer read** them (the files remain, but the new format is not understood by the old version). So when
+> rolling the dsh version back, roll the `dsh/` data directory back with it.
+>
+> To leave yourself a fallback point, use `docker exec dsh rescue dsh-upgrade <version>`: it records the
+> current version as last-good first.
+
 Check the current version:
 
 ```bash
