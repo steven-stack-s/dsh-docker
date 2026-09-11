@@ -61,7 +61,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 .
 ├── docker-compose.yml        # deployment config (vars in .env.example)
 ├── Dockerfile                # base image: node:24 + git + socat + openssh-client + pre-baked dsh seed
-├── entrypoint.sh             # container entry: copy DSH from seed → socat forward → start web
+├── scripts/                  # runtime code: container entrypoint, rescue CLI, shared library, probes
 ├── .env.example              # env template (copy to .env)
 ├── docs/
 │   ├── en/                   # English docs
@@ -86,7 +86,7 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 ```
 
 - At build time, dsh+pnpm are pre-installed into a seed (`/opt/dsh-seed`); the runtime also includes `node:24-slim` + git + ca-certificates + tzdata + socat + openssh-client.
-- On first boot, `entrypoint.sh` copies the seed to the mounted volume `/opt/dsh` (in seconds, offline, version-pinned); pnpm comes along with the seed.
+- On first boot, `scripts/entrypoint.sh` copies the seed to the mounted volume `/opt/dsh` (in seconds, offline, version-pinned); pnpm comes along with the seed.
 - Custom build: `docker build --build-arg DSH_VERSION=<version> --build-arg APT_MIRROR=mirrors.aliyun.com -t dsh-docker:<version> .`
 - Three persistent volumes: `./programs` (DSH program), `./dsh` (DSH_HOME user data), `./workspace` (agent workspace).
 

@@ -14,7 +14,7 @@ LOG_FILE="$LOG_DIR/rescue.log"
 
 # HERE: 继承 source 方(如 rescue 已置为仓库根或 /opt/dsh-rescue)；否则尽力自定位。仅本地开发兜底用，镜像内 LIFEBOAT_TMPL 由 Dockerfile 恒置。
 HERE="${HERE:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
-LIFEBOAT_TMPL="${LIFEBOAT_TMPL:-$HERE/profiles/lifeboat.tmpl}"
+LIFEBOAT_TMPL="${LIFEBOAT_TMPL:-$HERE/lifeboat.tmpl}"
 
 # 从文件读取模型密钥（F8）：支持 docker secret / 挂载文件，让密钥不必出现在 environment ——
 # 环境变量会被 `docker inspect` 与 /proc/<pid>/environ 直接读走。文件优先于环境变量。

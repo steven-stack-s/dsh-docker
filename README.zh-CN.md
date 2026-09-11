@@ -62,7 +62,7 @@ docker compose up -d
 .
 ├── docker-compose.yml        # 部署配置（变量见 .env.example）
 ├── Dockerfile                # 基础镜像：node:24 + git + socat + openssh-client + 预装 dsh seed
-├── entrypoint.sh             # 容器入口：从 seed 复制 DSH → socat 转发 → 启动 web
+├── scripts/                  # 运行时代码：容器入口、rescue CLI、共享库、探针、归因引擎
 ├── .env.example              # 环境变量模板（复制为 .env 填写）
 ├── docs/
 │   ├── en/                   # English docs
@@ -86,7 +86,7 @@ docker compose up -d
 ```
 
 - 镜像构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），运行环境含 `node:24-slim` + git + ca-certificates + tzdata + socat + openssh-client
-- 首次启动 `entrypoint.sh` 把 seed 复制到挂载卷 `/opt/dsh`（秒级、离线、版本固定），pnpm 随 seed 一起就位
+- 首次启动 `scripts/entrypoint.sh` 把 seed 复制到挂载卷 `/opt/dsh`（秒级、离线、版本固定），pnpm 随 seed 一起就位
 - 自定义构建：`docker build --build-arg DSH_VERSION=<版本> --build-arg APT_MIRROR=mirrors.aliyun.com -t dsh-docker:<版本> .`
 - 三个持久化卷：`./programs`（DSH 程序本体）、`./dsh`（DSH_HOME 用户数据）、`./workspace`（agent 工作区）
 

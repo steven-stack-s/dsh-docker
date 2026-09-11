@@ -19,8 +19,8 @@ check_exec() {
 }
 
 # 需要直接执行的
-check_exec entrypoint.sh
-check_exec rescue
+check_exec scripts/entrypoint.sh
+check_exec scripts/rescue
 check_exec scripts/ci-image-tags.sh
 check_exec scripts/logtag.js
 check_exec scripts/logtee.js

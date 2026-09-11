@@ -18,7 +18,7 @@ fail() { echo "FAIL-$1"; exit 1; }
 node -e '
 const fs=require("fs"), path=require("path");
 const R=process.argv[1];
-const files=["entrypoint.sh","scripts/rescue-supervise.sh","scripts/librescue.sh","scripts/logtee.js","rescue"];
+const files=["scripts/entrypoint.sh","scripts/rescue-supervise.sh","scripts/librescue.sh","scripts/logtee.js","scripts/rescue"];
 const code=files.map(f=>fs.readFileSync(path.join(R,f),"utf8")).join("\n");
 const vars=new Set();
 for(const m of code.matchAll(/\$[{]([A-Z_][A-Z0-9_]*)[:\-}]/g)) vars.add(m[1]);
@@ -41,7 +41,7 @@ process.exit(bad);
 # 2) 容器硬化必须在位（LAN 内任何能访问 3080 的人都能借 agent 以 root 执行）
 grep -q 'no-new-privileges' "$COMPOSE" || fail hardening-missing-no-new-privileges
 grep -q 'pids_limit' "$COMPOSE" || fail hardening-missing-pids-limit
-grep -q 'max-children' "$ROOT/entrypoint.sh" || fail hardening-missing-socat-max-children
+grep -q 'max-children' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-socat-max-children
 
 # 3) healthcheck 的 start_period 必须 > RESCUE_START_TIMEOUT（注释里写了的口径不变式）
 sp=$(grep -m1 'start_period:' "$COMPOSE" | tr -cd '0-9')
