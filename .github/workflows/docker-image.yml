@@ -3,7 +3,7 @@
 #
 # 触发：
 #   - 推送 v* tag -> 镜像 tag 为该 tag + latest
-#     tag 格式：v<项目版本>-dsh<dsh版本>，如 v0.3.7-dsh0.1.5-rc.1
+#     tag 格式：v<项目版本>-dsh<dsh版本>，如 v0.4.0-dsh0.1.5-rc.1
 #     解析与校验在 scripts/ci-image-tags.sh（有单测 scripts/t/test-ci-image-tags.sh）
 #   - 推送 main 分支 -> 镜像 tag 为 main，seed 装 npm latest
 #   - 手动 dispatch   -> main 分支打 :main，其他分支打 :branch-<slug>（不污染 :main）
@@ -25,7 +25,7 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# 发布串行化：:latest 是所有 tag 构建共享的输出。若按 github.ref 分组，v0.3.8 与 v0.3.9 的构建
+# 发布串行化：:latest 是所有 tag 构建共享的输出。若按 github.ref 分组，v0.4.0 与 v0.4.1 的构建
 # 分属不同组、互不排队，先触发但后完成的旧构建会把 :latest 回退到旧版本。故必须全局单组。
 # cancel-in-progress: false = 排队而非取消，避免打断正在推送的镜像。
 concurrency:
