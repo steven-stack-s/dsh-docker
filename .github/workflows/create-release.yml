@@ -1,0 +1,52 @@
+# ============================================================================
+# create-release.yml — 为【已存在的】tag 补建或更新 GitHub Release
+#
+# 为什么单独一个 workflow：正式发布的 Release 由 docker-image.yml 在 tag 构建成功后自动创建；
+# 但当 tag 已经推过、或需要给历史 tag 补 Release 时，重新跑一次多架构构建既慢又没必要。
+# 这里通过 workflow_dispatch 指定 tag，使用内置的 GITHUB_TOKEN，**不需要额外的 PAT**。
+#
+# 用法：Actions → create-release → Run workflow → 填入已存在的 tag（如 v0.4.0-dsh0.1.5-rc.1）
+# release notes 取自 CHANGELOG 中该 tag 的段落；幂等（已存在则更新，不会报错）。
+# ============================================================================
+name: create-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已存在的 tag（如 v0.4.0-dsh0.1.5-rc.1）'
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG 不存在，请先推送该 tag"
+            exit 1
+          fi
+          awk -v tag="$TAG" '
+            index($0, "## [" tag "]") == 1 { f = 1; next }
+            f && index($0, "## [") == 1 { exit }
+            f { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+            echo "CHANGELOG 中没有 $TAG 的段落，使用兜底说明"
+            printf 'See CHANGELOG.md for details.\n' > /tmp/notes.md
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 \
+            && gh release edit "$TAG" --title "$TAG" --notes-file /tmp/notes.md \
+            || gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          echo "release 已就绪：https://github.com/steven-stack-s/dsh-docker/releases/tag/$TAG"
