@@ -19,13 +19,16 @@ else
   . "$HERE/librescue.sh"                  # image flat layout /opt/dsh-rescue
 fi
 cmd="${1:-}"
-[ -n "$cmd" ] || { echo 'usage: rescue <snapshot|plugin|rollback|dsh-upgrade|dsh-reinstall|status|doctor|lifeboat|report|incident>'; exit 2; }
+[ -n "$cmd" ] || { echo 'usage: rescue <snapshot|snapshots|plugin|rollback|dsh-upgrade|dsh-reinstall|status|doctor|lifeboat|report|incident|verify|selfheal|export>'; exit 2; }
 shift
 
 case "$cmd" in
   snapshot)
     reason=''
-    if [ "${1:-}" = '--reason' ]; then reason="${2:-}"; shift 2 2>/dev/null || shift; fi
+    if [ "${1:-}" = '--reason' ]; then
+      [ $# -ge 2 ] || { echo 'usage: rescue snapshot [--reason <text>]'; exit 2; }
+      reason="$2"; shift 2
+    fi
     REASON_SNAPSHOT="$reason" rescue_snapshot
     ;;
   status)
@@ -77,12 +80,140 @@ case "$cmd" in
       *) echo 'usage: rescue incident list'; exit 2 ;;
     esac
     ;;
+  export)
+    # 诊断包（F14）：把排障需要的一切打成一个 tar.gz —— 事故、状态、快照元数据、环境摘要、
+    # doctor 输出、最近一轮启动日志尾部。刻意**不打**插件树/node_modules（体积大且是第三方代码），
+    # 也**绝不**读任何凭据文件；环境摘要只列 RESCUE_*/DSH_HOME 白名单变量，密钥不会进包。
+    out="${1:-$RESCUE_DIR/export-$(date +%Y%m%dT%H%M%S).tar.gz}"
+    _etmp=$(mktemp -d 2>/dev/null || printf '/tmp/rescue-export-%s' "$$")
+    mkdir -p "$_etmp/rescue/incidents" "$_etmp/rescue/state" "$_etmp/rescue/snapshots"
+    for f in "$(incident_dir)"/inc-*.json; do
+      [ -f "$f" ] && cp "$f" "$_etmp/rescue/incidents/" 2>/dev/null
+    done
+    for f in last-run.json selfheal.json lifeboat-requested; do
+      [ -f "$(state_dir)/$f" ] && cp "$(state_dir)/$f" "$_etmp/rescue/state/" 2>/dev/null
+    done
+    for d in $(rescue_snapshot_list_by_time); do
+      _en=${d##*/}
+      [ -f "$d/meta.json" ] && cp "$d/meta.json" "$_etmp/rescue/snapshots/$_en.meta.json" 2>/dev/null
+    done
+    {
+      echo "dsh: $(dsh --version 2>/dev/null || echo unknown)"
+      echo "date: $(date -Iseconds 2>/dev/null)"
+      echo "uname: $(uname -a 2>/dev/null)"
+      echo "profile: $RESCUE_PROFILE"
+      echo "--- rescue env (whitelist; secrets are never included) ---"
+      env | grep -E '^(RESCUE_|SOCAT_MAX_CHILDREN=)' | sort 2>/dev/null || true
+    } > "$_etmp/rescue/environment.txt" 2>/dev/null
+    sh "$SELF" doctor > "$_etmp/rescue/doctor.txt" 2>&1 || true
+    _evlast=$(ls -1dt "$(evidence_dir)"/boot-* 2>/dev/null | head -n1)
+    if [ -n "$_evlast" ] && [ -f "$_evlast/dsh.log" ]; then
+      mkdir -p "$_etmp/rescue/evidence"
+      tail -c 65536 "$_evlast/dsh.log" > "$_etmp/rescue/evidence/last-boot-tail.log" 2>/dev/null || true
+    fi
+    if ! tar -czf "$out" -C "$_etmp" rescue 2>/dev/null; then
+      rm -rf "$_etmp"; echo 'export: tar failed'; exit 1
+    fi
+    rm -rf "$_etmp"
+    echo "export: $out"
+    echo "export: 该包含事故/状态/快照元数据/环境摘要；不含插件树、会话、记忆与任何密钥"
+    ;;
+  selfheal)
+    # 自愈预算的可观测与可重置（P0-2）：预算跨重启持久化，此前用户既看不到余额、
+    # 也无从恢复；用满后自愈会一直只报告，看起来像"自愈坏了"。
+    sub="${1:-}"
+    case "$sub" in
+      status)
+        rescue_budget_read
+        echo "selfheal: gate RESCUE_AUTO=${RESCUE_AUTO:-on} RESCUE_SELFHEAL=${RESCUE_SELFHEAL:-on}  (两者都为 on 才会自动改动插件树)"
+        echo "budget: removes=${SELFHEAL_REMOVES:-0}/${RESCUE_REMOVE_LIMIT:-2} rollbacks=${SELFHEAL_ROLLBACKS:-0}/${RESCUE_ROLLBACK_LIMIT:-2}"
+        echo "window: expires after ${RESCUE_SELFHEAL_WINDOW:-86400}s; current window started ${SELFHEAL_WINDOW_START:-?}"
+        echo "state: $(state_dir)/selfheal.json"
+        ;;
+      reset)
+        SELFHEAL_REMOVES=0; SELFHEAL_ROLLBACKS=0; SELFHEAL_WINDOW_START="$(rescue_ts)"
+        rescue_budget_write
+        echo 'selfheal: budget reset (removes=0 rollbacks=0; window restarts now)'
+        ;;
+      *) echo 'usage: rescue selfheal <status|reset>'; exit 2 ;;
+    esac
+    ;;
+  verify)
+    # 快照完整性（P0-6）：hardlink 模式的快照与 live 共享 inode，可能已被就地改写污染。
+    # 无参 = 校验全部快照；带参 = 校验指定快照名。
+    if [ -n "${1:-}" ]; then
+      rescue_verify "$1" || exit 1
+      exit 0
+    fi
+    if [ -z "$(rescue_snapshot_list 2>/dev/null)" ]; then
+      echo 'verify: no snapshots'
+      exit 0
+    fi
+    vrc=0
+    for d in $(rescue_snapshot_list_by_time); do
+      rescue_verify "${d##*/}" || vrc=1
+    done
+    if [ "$vrc" != 0 ]; then
+      echo 'verify: 发现不可信快照（见上）。建议改用更早的可用快照，并删除已被写坏者。'
+      exit 1
+    fi
+    echo 'verify: all snapshots OK'
+    ;;
+  snapshots)
+    # 快照清单（P1-4）：编号 / 创建时间 / 模式 / 是否与当前插件树相同 / 变更原因。
+    # 自愈每次动作前都会先拍一份"故障现场"快照，因此"最新快照"未必是好状态 —— 用户需要能分辨。
+    list=$(rescue_snapshot_list_by_time)
+    if [ -z "$list" ]; then echo 'snapshots: (none)'; exit 0; fi
+    printf '%-11s %-20s %-9s %-8s %s\n' NAME CREATED MODE LIVE REASON
+    for d in $list; do
+      n=${d##*/}
+      c=$(rescue_snap_created "$d" | cut -c1-19)
+      mj=$(rescue_meta_read "$n" 2>/dev/null || true)
+      m=$(printf '%s' "$mj" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p'); [ -n "$m" ] || m=-
+      r=$(printf '%s' "$mj" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p'); [ -n "$r" ] || r=-
+      if rescue_snapshot_is_redundant "$n" 2>/dev/null; then lv=SAME; else lv=differs; fi
+      printf '%-11s %-20s %-9s %-8s %s\n' "$n" "$c" "$m" "$lv" "$r"
+    done
+    echo
+    echo 'SAME = 与当前插件树内容相同（回滚到它没有任何效果，rescue rollback 会自动跳过）'
+    echo '提示  rescue verify 可检查某个快照是否已被就地改写污染'
+    ;;
   rollback)
-    newest=$(rescue_snapshot_newest | xargs -r basename)
-    [ -n "$newest" ] || { echo 'no snapshot to rollback to'; exit 1; }
-    [ -n "$newest" ] || { echo 'no snapshot to rollback to'; exit 1; }
-    rescue_restore "$newest"
-    echo "restored $newest; restart container: docker restart dsh"
+    # 手动回滚：默认自动挑"真正与 live 不同"的快照（P1-3/P1-4），也可用 --to 显式指定。
+    to=''; dry=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --to)
+          # 显式判参：dash 下 `shift 2` 参数不足会直接终止脚本，`|| shift` 根本不可达
+          [ $# -ge 2 ] || { echo 'usage: rescue rollback [--to <snap>] [--dry-run] [--list]'; exit 2; }
+          to="$2"; shift 2 ;;
+        --dry-run|-n) dry=1; shift ;;
+        --list) exec sh "$SELF" snapshots ;;
+        *) echo "rollback: unknown option '$1'  (usage: rescue rollback [--to <snap>] [--dry-run] [--list])"; exit 2 ;;
+      esac
+    done
+    if [ -n "$to" ]; then
+      [ -d "$RESCUE_DIR/$to" ] || { echo "rollback: no such snapshot: $to"; exit 1; }
+      if rescue_snapshot_is_redundant "$to" 2>/dev/null; then
+        echo "rollback: $to 与当前插件树内容相同，回滚没有任何效果（未做改动）"
+        echo "rollback: 用 'rescue snapshots' 查看各快照与 live 的差异"
+        exit 1
+      fi
+      target="$to"
+    else
+      target=$(rescue_pick_rollback_target 2>/dev/null)
+      if [ -z "$target" ]; then
+        echo 'rollback: 没有与当前插件树不同的可用快照（未做改动）'
+        echo 'rollback: 用 rescue snapshots 查看现有快照；rescue verify 检查是否已被写坏'
+        exit 1
+      fi
+    fi
+    if [ "$dry" = 1 ]; then
+      echo "rollback: dry-run -> 将恢复到 $target（未做任何改动）"
+      exit 0
+    fi
+    rescue_restore "$target"
+    echo "restored $target; restart container: docker restart dsh"
     ;;
   dsh-upgrade)
     target="${1:-}"
@@ -121,7 +252,21 @@ case "$cmd" in
     fi
     ;;
   lifeboat)
-    echo 'set RESCUE=1 in .env then: docker compose up -d  (boots clean lifeboat)'
+    # 救生舱开关与状态：自动降级（自愈耗尽）会写一个一次性标记，这里也能手动管理。
+    sub="${1:-}"
+    case "$sub" in
+      on) rescue_lifeboat_request manual; echo 'lifeboat: requested — restart the container to boot the clean lifeboat profile' ;;
+      off) rescue_lifeboat_clear; echo 'lifeboat: request cleared — next start uses the normal profile' ;;
+      status|'')
+        if rescue_lifeboat_requested; then
+          echo 'lifeboat: REQUESTED (next start boots the clean lifeboat profile)'
+        else
+          echo 'lifeboat: not requested'
+        fi
+        echo 'usage: rescue lifeboat [on|off|status]   |   set RESCUE=1 in .env + docker compose up -d to boot it right now'
+        ;;
+      *) echo 'usage: rescue lifeboat [on|off|status]'; exit 2 ;;
+    esac
     ;;
   *) echo "unknown subcommand: $cmd"; exit 2 ;;
 esac

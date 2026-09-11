@@ -20,6 +20,12 @@ const NON_PLUGIN_PATTERNS = [
   { re: /listen EADDRINUSE/i, cat: 'port-in-use', kw: '端口被占用' },
 ];
 // 从错误文本提取“疑似包名”：优先插件加载/模块缺失行，其次全局
+// 是否属于"插件失败"：模式表此前定义了却从未参与判定，"是否插件相关"实际只由
+// "日志里有没有带引号的包名"决定 —— 任何打印过 "@scope/x" 的无关日志（配置 dump、第三方
+// 库的普通报错）都可能被当成肇事插件并触发自动摘插件。先过模式表，再谈包名。
+function isPluginFailure(text) {
+  return PLUGIN_FAIL_PATTERNS.some((re) => re.test(text));
+}
 function extractPluginName(text) {
   const candidates = [];
   // Cannot find module 'X' 或 plugin ... 'X'
@@ -114,7 +120,8 @@ function diagnose(opts) {
   const merged = readFileOr(path.join(eDir, 'dsh.log'));
   const text = (out + '\n' + err + '\n' + merged);
   const ctx = buildChangeContext(opts.rescueDir);
-  const offender = extractPluginName(text);
+  // 先判定"这是不是插件故障"，再提取肇事包名（见 isPluginFailure 的注释）
+  const offender = isPluginFailure(text) ? extractPluginName(text) : null;
   const nonPlugin = NON_PLUGIN_PATTERNS.find((pp) => pp.re.test(text));
   let r;
   if (nonPlugin && !offender) {

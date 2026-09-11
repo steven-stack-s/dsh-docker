@@ -72,7 +72,6 @@ function main() {
     return;
   }
   // overview
-  const snaps = countDir(path.join(rd, 'snap-*')) ? 0 : 0;
   let snapDirs = [];
   try { snapDirs = fs.readdirSync(rd).filter((n) => /^snap-\d{4}$/.test(n)); } catch (e) {}
   const evidenceN = countDir(path.join(rd, 'evidence'));
