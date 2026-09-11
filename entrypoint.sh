@@ -13,6 +13,10 @@ set -e
 # 带时间戳日志（格式与 rescue.log 一致 %Y-%m-%dT%H:%M:%S%z）：docker logs 人读时间线
 elog() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 
+# HERE：本脚本所在目录（镜像内 /usr/local/bin）。librescue.sh 用它推导仓库/镜像布局的兜底路径；
+# 显式赋值是为了不再依赖"librescue 恰好也设置了它"这种隐式耦合。
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
 if ! command -v dsh >/dev/null 2>&1; then
   elog "[entrypoint] first boot: seeding @deepseek-ai/dsh into mounted volume /opt/dsh ..."
   if [ -x /opt/dsh-seed/bin/dsh ]; then
@@ -51,25 +55,28 @@ fi
 # dsh web 刻意只监听 127.0.0.1（--host 0.0.0.0 被安全拒绝）。
 # 端口分工：dsh 内部监听 127.0.0.1:3081；socat 把外部 0.0.0.0:3080 转发到 3081。
 # （socat 不能听 3080 再让 dsh 也听 3080：0.0.0.0 会占用 127.0.0.1，必然 EADDRINUSE）
+# 端口分工：dsh 内部监听 127.0.0.1:$PORT_INNER；socat 把外部 $SOCAT_PORT 转发进去。
+PORT_INNER=3081
+SOCAT_PORT="${SOCAT_PORT:-3080}"
+# 并发上限：socat 的 fork 模式每连接一个进程，无上限时外部无认证的并发连接即可耗尽容器内存
+SOCAT_MAX_CHILDREN="${SOCAT_MAX_CHILDREN:-64}"
+
+# socat 转发器：用户的唯一入口，此前完全没有监督（它死掉后 dsh 仍健康、容器仍 green、healthcheck
+# 照样通过，但外部彻底失联）。封装成函数交给监督循环守护，死掉即重启。
+start_socat() {
+  socat "TCP-LISTEN:$SOCAT_PORT,fork,reuseaddr,max-children=$SOCAT_MAX_CHILDREN" \
+        "TCP:127.0.0.1:$PORT_INNER,forever,intervall=1" &
+  SOCAT_PID=$!
+}
+
 if command -v socat >/dev/null 2>&1; then
-  elog "[entrypoint] starting socat forward: 0.0.0.0:3080 -> 127.0.0.1:3081"
+  elog "[entrypoint] starting socat forward: 0.0.0.0:$SOCAT_PORT -> 127.0.0.1:$PORT_INNER (max-children=$SOCAT_MAX_CHILDREN)"
   # 上游 forever + intervall=1：socat 先于 dsh web 启动，dsh 监听 3081 前
   # 若有连接打到 3080，socat 会每秒重试直到 dsh 就绪，而不是抛 Connection refused
-  socat TCP-LISTEN:3080,fork,reuseaddr TCP:127.0.0.1:3081,forever,intervall=1 &
+  start_socat
 fi
 
 elog "[entrypoint] starting dsh web (internal 127.0.0.1:3081)"
-# --no-open：容器内无浏览器，禁用 dsh 自动打开浏览器
-# --trusted-host：dsh 0.1.2 的 /api 通道仅信任 loopback 或白名单 Host；
-#   浏览器经局域网 IP / 隧道域名访问时被 403 拒绝（页面能开但连接异常）。
-#   通过 DSH_TRUSTED_HOSTS 传入（逗号分隔，如 "192.168.1.5:3080,app.xx.com"）逐一加白。
-TRUSTED_ARGS=""
-if [ -n "$DSH_TRUSTED_HOSTS" ]; then
-  elog "[entrypoint] trusted Host allowlist: $DSH_TRUSTED_HOSTS"
-  for h in $(echo "$DSH_TRUSTED_HOSTS" | tr ',' ' '); do
-    TRUSTED_ARGS="$TRUSTED_ARGS --trusted-host $h"
-  done
-fi
 # ===================== 救援模式 =====================
 # 加载共享库：优先 /opt/dsh-rescue（镜像内，独立于卷）。
 # 缺失时降级为「无自动回退」：定义 no-op，保证老镜像/精简镜像仍能正常 exec 启动。
@@ -94,9 +101,36 @@ else
   rescue_state_read_lastrun() { :; }
   rescue_state_write_selfheal() { :; }
   rescue_state_read_selfheal() { :; }
+  rescue_trusted_args() { printf '%s' ''; }
+  rescue_lifeboat_requested() { return 1; }
+  rescue_lifeboat_clear() { :; }
+  rescue_lifeboat_request() { :; }
 fi
 
-PORT_INNER=3081
+# ---- 以下两项依赖 librescue 提供的函数，必须在上面 source 之后执行 ----
+# 真机教训：这两块原来放在 source 之前，`command -v` 判空后静默跳过，于是"Host 白名单校验"与
+# "凭据文件"完全没生效，而单测只测函数本身、全绿。scripts/t/test-entrypoint-order.sh 专门盯这个顺序。
+#
+# 凭据（F8）：DEEPSEEK_API_KEY_FILE 优先于环境变量，让密钥可以只存在于挂载文件 / docker secret 里，
+# 不出现在 `docker inspect` 与环境变量中。
+if command -v rescue_load_api_key >/dev/null 2>&1; then
+  if ! rescue_load_api_key; then
+    elog '[entrypoint] WARN DEEPSEEK_API_KEY_FILE set but unreadable/empty; falling back to DEEPSEEK_API_KEY'
+  fi
+fi
+
+# --trusted-host：dsh 的 /api 通道仅信任 loopback 或白名单 Host；
+#   浏览器经局域网 IP / 隧道域名访问时会被 403 拒绝（页面能开但连接异常）。
+#   通过 DSH_TRUSTED_HOSTS 传入（逗号分隔，如 "192.168.1.5:3080,app.xx.com"）逐一加白。
+TRUSTED_ARGS=""
+if [ -n "$DSH_TRUSTED_HOSTS" ]; then
+  elog "[entrypoint] trusted Host allowlist: $DSH_TRUSTED_HOSTS"
+  if command -v rescue_trusted_args >/dev/null 2>&1; then
+    TRUSTED_ARGS=$(rescue_trusted_args "$DSH_TRUSTED_HOSTS")
+  fi
+  [ -n "$TRUSTED_ARGS" ] || elog '[entrypoint] WARN trusted Host allowlist produced no usable entry (all entries invalid?)'
+fi
+
 RESCUE_START_TIMEOUT="${RESCUE_START_TIMEOUT:-120}"
 RESCUE_AUTO="${RESCUE_AUTO:-on}"
 RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
@@ -141,6 +175,13 @@ boot_lifeboat() {
 }
 
 if [ "${RESCUE:-0}" = "1" ]; then boot_lifeboat; fi
+
+# 自动降级（F7）：自愈彻底失败时留下的标记 —— 以干净最小 profile 起来（一次性：进入即清除，
+# 用户修好插件后直接 docker restart 就能回到正常 profile，不必再改 .env）。
+if command -v rescue_lifeboat_requested >/dev/null 2>&1 && rescue_lifeboat_requested 2>/dev/null; then
+  rescue_lifeboat_clear
+  boot_lifeboat "auto fallback: self-heal exhausted"
+fi
 
 # ===================== 归因自愈编排 + 监督主循环（rescue-supervise）=====================
 # 监督 / 诊断 / 自愈编排与主循环由 scripts/rescue-supervise.sh 提供（方案 A 重构：本文件只

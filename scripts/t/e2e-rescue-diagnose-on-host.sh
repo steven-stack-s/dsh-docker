@@ -29,6 +29,9 @@ E2E_MAX_WAIT_SECS="${E2E_MAX_WAIT_SECS:-}"
 log()  { echo "[e2e] $*"; }
 fail() { echo "[e2e] FAIL: $*"; exit 1; }
 note() { echo "[e2e] (manual/optional) $*"; }
+# 红线标记：A 段若发现 cordis.patch.yml 被改动则置 1。不立即 exit（须先走收尾恢复现场），
+# 由脚本结尾统一以非 0 退出——"红线被破必须停下人工处置"不能只打印一条 note。
+REDLINE_BROKEN=0
 
 # ---------- 0) 前置 ----------
 command -v docker >/dev/null 2>&1 || fail "docker 不可用：须在真实 Docker 宿主运行。"
@@ -43,10 +46,11 @@ cordis_before="$(docker exec -e PDIR="$PDIR" "$CONTAINER" sh -c 'cat "$PDIR/cord
 start_mark=""
 take_start_mark() { start_mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; }
 
-# 有界轮询：找 restart 后容器日志中出现的关键字（宽松集合）
+# 有界轮询：找 restart 后容器日志中出现的标记。
+# $2 为**单个** grep -E 正则（多分支用 | 自己写）：早期版本把空格当多模式分隔符，
+# 使得 'healthy on' 被展开成 'healthy|on' —— 任何含 "on" 的行都算命中，断言形同虚设。
 wait_for_log() {
-  label="$1"; shift
-  pat="$(printf '%s' "$*" | tr ' ' '|')"
+  label="$1"; pat="$2"
   elapsed=0
   while [ "$elapsed" -lt "$max_wait" ]; do
     sleep "$POLL_INTERVAL"; elapsed="$((elapsed + POLL_INTERVAL))"
@@ -94,21 +98,24 @@ backup_tree
 break_dep "@scope/dsh-e2e-bad" "$PDIR"
 docker restart "$CONTAINER"
 wait_for_log A-diag "diagnose|incident|selfheal|remove-plugin"
-wait_for_log A-recover "healthy on|listening" || note "A: 未见 恢复(healthy) 标记；请人工核对日志（可能 report-only 或需再等一轮）"
+wait_for_log A-recover '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "A: 未见 恢复(healthy) 标记；请人工核对日志（可能 report-only 或需再等一轮）"
 A_inc=0; wait_report_pkg "@scope/dsh-e2e-bad" && A_inc=1 || true
 cordis_after="$(docker exec -e PDIR="$PDIR" "$CONTAINER" sh -c 'cat "$PDIR/cordis.patch.yml" 2>/dev/null | md5sum' 2>/dev/null || true)"
 if [ "$cordis_before" = "$cordis_after" ] && [ "$A_inc" -eq 1 ]; then
   log "[OK] A: self-heal/恢复 + incident 命中坏插件；cordis.patch.yml 未变（红线通过）"
+elif [ "$cordis_before" != "$cordis_after" ]; then
+  REDLINE_BROKEN=1
+  note "A: !! 红线被破 —— cordis.patch.yml 发生变化（before=${cordis_before} after=${cordis_after}）"
+  note "   自愈只允许动插件树四件套；请立即停下人工处置，勿继续采信后续段落结论。"
 else
-  note "A: 未同时满足 (incident 命中坏插件) 与 (cordis 一致)。请人工核对 docker logs/rescue report："
-  note "   若是 report-only(模式未命中) 属保守预期；若 cordis 变化则红线被破，必须停下人工处置。"
+  note "A: 未产出命中坏插件的 incident（report-only 属保守预期）。请人工核对 docker logs/rescue report。"
 fi
 
 # ============================================================================
 # B) no-baseline：绕过 rescue 封装改坏、无对应快照 -> 保守 report-only（不自动摘）
 # ============================================================================
 log "== B) no-baseline 改坏 -> 期望保守 report-only =="
-restore_tree; docker restart "$CONTAINER"; wait_for_log B-base "healthy on|listening" || note "B: 基线恢复等待超时"
+restore_tree; docker restart "$CONTAINER"; wait_for_log B-base '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "B: 基线恢复等待超时"
 take_start_mark
 backup_tree
 break_dep "@scope/dsh-e2e-nobase" "$PDIR"
@@ -124,7 +131,7 @@ fi
 # C) RESCUE_SELFHEAL=off：只诊断 + incident，不做任何自愈动作
 # ============================================================================
 log "== C) RESCUE_SELFHEAL=off -> 期望只诊断不自动摘 =="
-restore_tree; docker restart "$CONTAINER"; wait_for_log C-base "healthy on|listening" || note "C: 基线恢复等待超时"
+restore_tree; docker restart "$CONTAINER"; wait_for_log C-base '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "C: 基线恢复等待超时"
 take_start_mark
 backup_tree
 break_dep "@scope/dsh-e2e-off" "$PDIR"
@@ -142,7 +149,7 @@ fi
 # D) 运行期崩溃归因：healthy 后杀主进程 -> restart -> runtime incident（仅报告）
 # ============================================================================
 log "== D) 运行期崩溃归因（保守：只报告不自动处置）=="
-restore_tree; docker restart "$CONTAINER"; wait_for_log D-base "healthy on|listening" || note "D: 基线恢复等待超时"
+restore_tree; docker restart "$CONTAINER"; wait_for_log D-base '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "D: 基线恢复等待超时"
 take_start_mark
 # 杀 dsh 主进程制造 runtime crash
 docker exec "$CONTAINER" sh -c 'p=$(pgrep -f "3081" | head -1); if [ -n "$p" ]; then kill "$p"; echo "[e2e] killed dsh pid=$p"; fi' || note "D: 未找到可杀的 dsh 主进程（可能非 3081 布局），跳过 D"
@@ -160,7 +167,7 @@ else
   note "D: 未捕获 runtime abnormalExit 标记；请人工核对 last-run.json / rescue.log。"
 fi
 docker restart "$CONTAINER" >/dev/null 2>&1 || true
-wait_for_log D-recover "healthy on|listening" || note "D: 最终恢复未见 healthy，请人工确认回到良好态。"
+wait_for_log D-recover '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "D: 最终恢复未见 healthy，请人工确认回到良好态。"
 
 # ============================================================================
 # E) 归因模式命中提示（校准提醒）
@@ -175,9 +182,14 @@ note "再按需调整 /opt/dsh-rescue/diagnose.js 顶部 PLUGIN_FAIL_PATTERNS / 
 # ============================================================================
 restore_tree
 docker restart "$CONTAINER" >/dev/null 2>&1 || true
-wait_for_log final "healthy on|listening" || note "收尾: restart 后未见 healthy，请人工确认容器回到良好态。"
+wait_for_log final '\[entrypoint\] dsh healthy on 127\.0\.0\.1:' || note "收尾: restart 后未见 healthy，请人工确认容器回到良好态。"
 
 echo
+if [ "$REDLINE_BROKEN" -ne 0 ]; then
+  echo '[e2e] ===== rescue-diagnose host acceptance: FAIL（红线被破：cordis.patch.yml 被改动）====='
+  exit 1
+fi
 echo '[e2e] ===== rescue-diagnose host acceptance: DONE ====='
 echo '[e2e] 硬性红线判定见 A 段(cordis.patch.yml 未变)。A 的 OK / B/C/D 的标记请结合上方输出与 rescue report 复核。'
+exit 0
 
