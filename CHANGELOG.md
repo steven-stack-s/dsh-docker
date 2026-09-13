@@ -4,6 +4,20 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.4.1-dsh0.1.5-rc.2] - 2026-09-13
+
+> 例行跟版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.1` 升至 `0.1.5-rc.2`（npm 于 2026-09-10 发布，dist-tag `next`）。
+> 本仓库的部署逻辑与 v0.4.0 完全一致 —— entrypoint / 自愈救援体系未做任何改动。
+
+### Changed
+- **锁定 DSH 版本 `0.1.5-rc.1` → `0.1.5-rc.2`**：CI 依 tag 后缀解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故 `v0.4.1-dsh0.1.5-rc.2` 构建出的镜像 seed 内即为 0.1.5-rc.2；发布门禁 3（镜像自证）会在构建后用镜像内 `/opt/dsh-seed/bin/dsh --version` 断言与 tag 后缀一致。`docker-compose.yml` 中本地构建的默认值 `DSH_VERSION` 同步跟进。
+- **文档 tag 示例同步**：README（中/英）的 DSH 版本徽章更新为 `0.1.5-rc.2`；README、`docker-compose.yml` 注释与 workflow 注释中的示例 tag 改为 `v0.4.1-dsh0.1.5-rc.2`。此徽章此后由 tag 构建成功后的 `scripts/update-dsh-badge.sh` 自动同步，无需手工维护。
+
+### 升级注意（0.1.5-rc.1 → 0.1.5-rc.2）
+- 容器内部署（程序装在卷上）无需重建镜像：`docker exec dsh npm install -g @deepseek-ai/dsh@0.1.5-rc.2 && docker restart dsh`。
+- 用镜像部署则改用新 tag：`DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v0.4.1-dsh0.1.5-rc.2`（或继续跟随 `:latest`）。
+- 同一 minor 内的预发布迭代，仍建议按惯例在升级前备份整个部署目录（程序 / 数据 / 工作区三个卷），以便按 docs/zh-CN/03-升级与维护.md 回滚。
+
 ## [v0.4.0-dsh0.1.5-rc.1] - 2026-09-12
 
 > 本版是一次大范围的自愈体系加固：8 个 P0、12 个 P1 与主要 P2 全部修复，落地 14 个新功能点，
