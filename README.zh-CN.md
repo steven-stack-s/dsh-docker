@@ -2,6 +2,13 @@
 
 # DSH Docker 部署
 
+[![GitHub Release](https://img.shields.io/github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8)](https://github.com/steven-stack-s/dsh-docker/releases)
+[![镜像构建](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml/badge.svg)](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml)
+[![GHCR 镜像](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.1-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
+[![MIT 许可证](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
+[![Stars](https://img.shields.io/github/stars/steven-stack-s/dsh-docker?color=5965d8)](https://github.com/steven-stack-s/dsh-docker/stargazers)
+
 > 在**任意 Docker 环境**（Linux 服务器 / NAS / 云主机 / Docker Desktop）一键部署
 > [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）——DeepSeek 官方的 AI 编程 Agent 框架（Web UI + CLI）。
 
