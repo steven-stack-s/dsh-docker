@@ -23,6 +23,12 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # 纯文档改动不重建镜像。这同时是末尾「同步 DSH 版本徽章」步骤回推 main 的防回环措施：
+    # 该步骤发版后会提交 README，没有这条过滤就会额外触发一次 main 镜像构建，还会与正在跑的
+    # tag 构建在同一个 image-publish 组里排队。
+    # 注：路径过滤对 tag 推送本就不生效（GitHub 规则），因此 tag 构建完全不受影响。
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 # 发布串行化：:latest 是所有 tag 构建共享的输出。若按 github.ref 分组，v0.4.0 与 v0.4.1 的构建
@@ -152,3 +158,36 @@ jobs:
             echo '--- smoke stderr ---'; cat /tmp/smoke.err 2>/dev/null || true
             exit 1
           fi
+
+      # ---- 发布收尾：把 README 里的 DSH 版本徽章同步到本次发布的版本 ----
+      # README 中该徽章是 shields **静态**徽章，没有上游数据源可查，不主动改写就会永远停在
+      # 写下它的那一刻（对照：control-center 的 README 至今写着 0.1.5-alpha.1）。
+      # 放在最后一步：与前面的镜像自证互不干扰，失败时镜像与 Release 也都已正常发布。
+      # 该步骤失败会让 job 变红 —— 这是刻意的：徽章静默不更新比发布报错更难被发现。
+      # （main 若启用了分支保护禁止直推，此处会失败，届时改为开 PR 的方式同步。）
+      - name: Sync DSH version badge in READMEs
+        if: github.ref_type == 'tag'
+        env:
+          # 表达式一律经 env 传入，遵循本文件既有约定（直接插进 run 是 GitHub 官方列出的注入向量）
+          DSH_VERSION: ${{ steps.meta.outputs.dsh_version }}
+        run: |
+          # tag 构建 checkout 的是 tag 本身（detached HEAD 且为浅克隆），而要改的 README 在 main 上，
+          # 所以先取回 main 再切过去。-B 明确以刚取到的 commit 为准，避免本地分支状态歧义。
+          git fetch --depth=1 origin main
+          git checkout -B main FETCH_HEAD
+
+          # 幂等且只升不降：已是该版本则不改（下面 diff 为空直接返回），
+          # 目标低于现值则拒绝并退出 1（防止补发历史 tag 时把徽章改回旧版本）。
+          sh scripts/update-dsh-badge.sh "$DSH_VERSION"
+
+          if git diff --quiet -- README.md README.zh-CN.md; then
+            echo "徽章已是最新，无需提交"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md README.zh-CN.md
+          # [skip ci] 与上面的 paths-ignore 是双保险：确保这次纯文档提交不会触发任何 CI
+          git commit -m "docs: 同步 DSH 版本徽章至 ${DSH_VERSION} [skip ci]"
+          git push origin main
