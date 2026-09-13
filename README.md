@@ -2,6 +2,13 @@
 
 # Deploy DeepSeek Harness (DSH) with Docker
 
+[![GitHub Release](https://img.shields.io/github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8)](https://github.com/steven-stack-s/dsh-docker/releases)
+[![Image Build](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml/badge.svg)](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.1-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
+[![License](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
+[![Stars](https://img.shields.io/github/stars/steven-stack-s/dsh-docker?color=5965d8)](https://github.com/steven-stack-s/dsh-docker/stargazers)
+
 > Deploy [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) — DeepSeek's official AI coding agent framework (Web UI + CLI) — on **any Docker environment** with one command.
 
 ---
