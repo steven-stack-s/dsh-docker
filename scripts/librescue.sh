@@ -148,13 +148,43 @@ rescue_meta_read() {
   cat "$mf"
 }
 
+# 钉住的快照：最新一份「健康基线」（reason 形如 boot-healthy*）。
+# 为什么需要：自愈选回退目标时第一轮只认 boot-healthy*（见 rescue_pick_rollback_target）——
+# 那是唯一被证明能启动过的状态。而插件市场(dshmarket)/手工变更会连续产生快照，纯 FIFO 轮转
+# 会把基线挤出 RESCUE_KEEP 窗口，自愈只能退化到第二轮的任意非现场快照（最坏 report-only）。
+# 故基线保留最新 1 份、不参与轮转——总数仍受 RESCUE_KEEP 约束，只是改淘汰别的快照。
+rescue_prune_pinned() {
+  # 最新 -> 最老（反序）：第一条命中的就是「最新一份」基线
+  for d in $(rescue_snapshot_list_by_time | sed '1!G;h;$!d'); do
+    n=${d##*/}
+    case "$(rescue_meta_read "$n" 2>/dev/null | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p')" in
+      boot-healthy*) printf '%s' "$n"; return 0 ;;
+    esac
+  done
+  return 0
+}
+
+# 本轮淘汰谁：从最老往最新取第一个「不是钉住项 $1」的快照；全部都被钉住时返回 1（调用方 break）。
+# 不能直接用 rescue_snapshot_oldest()：钉住项可能恰好就是最老那份，那样每次都会选中它 ——
+# 删不掉却又照减计数，结果是悄悄少删（保留数虚高）甚至死循环。这里显式跳过。
+rescue_prune_victim() {
+  for d in $(rescue_snapshot_list_by_time); do
+    n=${d##*/}
+    if [ -n "$1" ] && [ "$n" = "$1" ]; then continue; fi
+    printf '%s' "$n"
+    return 0
+  done
+  return 1
+}
+
 rescue_prune() {
   n=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt "$RESCUE_KEEP" ] || return 0
+  pin=$(rescue_prune_pinned)
   while [ "$n" -gt "$RESCUE_KEEP" ]; do
-    oldest=$(rescue_snapshot_oldest)
-    [ -n "$oldest" ] || break
-    rescue_log "prune $oldest"
-    rm -rf "$oldest"
+    victim=$(rescue_prune_victim "$pin") || break
+    rescue_log "prune $RESCUE_DIR/$victim"
+    rm -rf "$RESCUE_DIR/$victim"
     n=$((n-1))
   done
 }

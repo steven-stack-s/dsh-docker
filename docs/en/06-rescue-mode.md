@@ -43,7 +43,7 @@ Relevant environment variables (`.env`; inside the container, inspect with `dock
 | RESCUE | 0 | 0=normal; 1=lifeboat boot (see §5) |
 | RESCUE_AUTO | on | **master switch for automatic intervention**: on=attribute and roll back / remove plugins on failure; off=diagnose + write incident only, never touch the plugin tree |
 | RESCUE_START_TIMEOUT | 120 | readiness-probe timeout in seconds |
-| RESCUE_KEEP | 3 | how many recent **snapshots** to keep |
+| RESCUE_KEEP | 3 | how many recent **snapshots** to keep (the newest `boot-healthy` baseline is pinned and never rotated out — see Snapshot retention under §3) |
 | RESCUE_MAX_ATTEMPTS | KEEP+1 | boot retry cap (decoupled from the snapshot count; defaults to `RESCUE_KEEP+1`) |
 | RESCUE_EVIDENCE_KEEP | KEEP | how many `evidence/boot-*` directories to keep (defaults to `RESCUE_KEEP`) |
 | RESCUE_PROFILE | web | target profile for rollback / plugin ops |
@@ -58,6 +58,12 @@ Relevant environment variables (`.env`; inside the container, inspect with `dock
 | DEEPSEEK_API_KEY_FILE | (empty) | read the model key from a file (docker secret / mounted file) instead of the environment, so it never shows up in `docker inspect` |
 | RESCUE_DIAGNOSE_EVIDENCE | on | tee each dsh boot output to `$DSH_HOME/.rescue/evidence/` for attribution |
 | RESCUE_INCIDENT_KEEP | 20 | how many incidents to keep under `$DSH_HOME/.rescue/incidents/` |
+
+**Snapshot retention.** Once the count exceeds `RESCUE_KEEP` the oldest snapshots are evicted, but **the newest `boot-healthy` baseline is pinned and never rotated out**:
+self-heal's first pass only accepts a baseline as a rollback target (`rescue_pick_rollback_target` — the only state ever proven to boot),
+while the plugin market (dshmarket) and manual changes keep producing snapshots. Plain FIFO would evict the baseline first, leaving self-heal with
+nothing but the second pass (any non-scene snapshot). Pinning changes only **which** snapshot is evicted — the cap still holds (`RESCUE_KEEP=2` with
+1 oldest baseline + 2 change snapshots evicts the second-oldest change snapshot and keeps the baseline; an all-baseline window keeps shrinking normally).
 
 ## 3. Command Cheat Sheet
 

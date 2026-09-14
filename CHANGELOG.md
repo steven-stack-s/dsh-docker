@@ -4,6 +4,16 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [Unreleased]
+
+### Fixed
+- **`prune` 不再把唯一的健康基线挤出窗口**：`rescue_prune()` 现在钉住**最新一份** `boot-healthy` 基线快照（reason 形如 `boot-healthy*`），
+  逐出改为「从最老往最新取第一个非钉住项」。背景：自愈选回退目标时第一轮只认基线（`rescue_pick_rollback_target` —— 唯一被证明能启动过的状态），
+  而插件市场(dshmarket) / 手工变更会连续产生快照，纯 FIFO 轮转会先把基线删掉，自愈只能退化到第二轮的任意非现场快照（最坏 report-only）。
+  钉住只改变「淘汰谁」：总份数仍受 `RESCUE_KEEP` 约束；窗口内全是基线时照常逐出更旧的那些，不会卡死。
+  新增 `scripts/t/test-prune-pin-baseline.sh`（5 组用例：基线为最老一份必须留下 / 无基线时行为不变 / 多份基线只钉最新 / 全基线仍能减员 / KEEP 已满足时不动）。
+  文档同步：`docs/{zh-CN,en}/06` 参数表与新增「快照保留」说明、`.env.example` 两处注释。
+
 ## [v0.4.1-dsh0.1.5-rc.2] - 2026-09-13
 
 > 例行跟版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.1` 升至 `0.1.5-rc.2`（npm 于 2026-09-10 发布，dist-tag `next`）。
