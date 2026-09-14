@@ -4,7 +4,7 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [v0.4.2-dsh0.1.5-rc.2] - 2026-09-14
 
 ### Fixed
 - **`prune` 不再把唯一的健康基线挤出窗口**：`rescue_prune()` 现在钉住**最新一份** `boot-healthy` 基线快照（reason 形如 `boot-healthy*`），
