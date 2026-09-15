@@ -51,6 +51,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Environment diagnostics
+        run: |
+          echo "--- node ---"; node --version || echo "node MISSING"
+          echo "--- sh ---"; ls -l /bin/sh
+          echo "--- RESCUE_* leaked into CI env ---"; env | grep -i "^RESCUE_" || echo "(none)"
+          echo "--- git describe ---"; git describe --tags --always || true
       - name: Run rescue unit tests
         run: |
           fail=0
