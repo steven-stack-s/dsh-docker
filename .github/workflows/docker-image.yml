@@ -62,17 +62,17 @@ jobs:
           fail=0
           for f in scripts/t/test-*.sh; do
             printf '%-42s' "$(basename "$f")"
-            if sh "$f" >/tmp/unit-test.out 2>&1; then
+            if sh "$f" >"/tmp/unit-test-$(basename "$f").out" 2>&1; then
               echo PASS
             else
               echo FAIL
-              cat /tmp/unit-test.out
+              cat "/tmp/unit-test-$(basename "$f").out"
               # 失败详情同时写入 job summary：CI 日志需管理员权限才能读取，
               # 而 summary 可经 API 获取，便于定位（本地全绿 / CI 红时的唯一线索）。
               {
                 echo "### FAIL: $(basename "$f")"
                 echo '```'
-                cat /tmp/unit-test.out
+                cat "/tmp/unit-test-$(basename "$f").out"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
               fail=1
@@ -85,6 +85,15 @@ jobs:
             echo "- leaked RESCUE_*: $(env | grep -c "^RESCUE_" || true)"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
+      # 失败时把每个测试的独立输出上传为 artifact：CI 日志需管理员权限，
+      # artifact 可用有写权限的 token 下载，是排查"本地全绿 / CI 红"的唯一可靠线索。
+      - name: Upload test outputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-outputs
+          path: /tmp/unit-test-*.out
+          if-no-files-found: ignore
 
   build-and-push:
     needs: unit-tests
