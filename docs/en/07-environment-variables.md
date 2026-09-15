@@ -60,7 +60,7 @@ system only diagnoses and writes incidents.
 | Variable | Default | Meaning |
 |---|---|---|
 | `DSH_IMAGE` | `ghcr.io/steven-stack-s/dsh-docker:latest` | Image pulled at `up`. To pin a version explicitly, use the `v<project>-dsh-<dsh>` tag scheme. For local-build scenarios, switch to your own tag (e.g. `dsh-base:final`). |
-| `DSH_VERSION` | `0.1.5-rc.2` | **Only used for local builds** (compose `build.args`); pins the dsh version baked into the seed. The pulled `:latest` and the local `DSH_VERSION` are two different sources — do not mix. |
+| `DSH_VERSION` | `0.1.6-alpha.1` | **Only used for local builds** (compose `build.args`); pins the dsh version baked into the seed. The pulled `:latest` and the local `DSH_VERSION` are two different sources — do not mix. |
 | `PNPM_VERSION` | `latest` | **Only used for local builds**; pins the pnpm version baked into the seed. |
 
 ---

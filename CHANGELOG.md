@@ -4,8 +4,38 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [v0.4.3-dsh-0.1.5-rc.2] - 2026-09-15
+## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 
+> 跟进 DSH 预览版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.2` 升至 `0.1.6-alpha.1`
+> （npm dist-tag `alpha`）。**本仓库的部署逻辑未做任何改动** —— entrypoint / 自愈救援
+> 体系与 v0.4.3 完全一致；经对照验证，seed 复制、lifeboat、快照与 CI 全链路在 0.1.6 下均可用。
+
+### Changed
+- **锁定 DSH 版本 `0.1.5-rc.2` → `0.1.6-alpha.1`**：CI 依 tag 后缀解析 `DSH_VERSION`，
+  故 `v0.4.4-dsh-0.1.6-alpha.1` 构建出的镜像 seed 内即为 0.1.6-alpha.1；发布门禁 3（镜像自证）
+  会在构建后用镜像内 `/opt/dsh-seed/bin/dsh --version` 断言与 tag 后缀一致。
+  `Dockerfile` 的 `ARG DSH_VERSION` 与 `docker-compose.yml` 本地构建的默认值同步跟进。
+- **文档版本引用同步**：README（中/英）徽章更新为 `0.1.6-alpha.1`；示例 tag、07 环境变量速查表
+  的 `DSH_VERSION` 默认值、03 升级文档的 dist-tag 说明表一并更新。
+
+### 升级注意（0.1.5-rc.2 → 0.1.6-alpha.1）
+
+⚠️ **这是 alpha 预览版，不是稳定版。** 生产环境请评估后再跟进；npm 的 `latest` 仍指向 0.1.5-rc.1，
+`next` 指向 0.1.5-rc.2 —— 要用本版本必须写全 `@0.1.6-alpha.1`。
+
+- 容器内部署（程序装在卷上）无需重建镜像：
+  `docker exec dsh npm install -g @deepseek-ai/dsh@0.1.6-alpha.1 && docker restart dsh`。
+  注意：**不能**用 `@latest` 或 `@alpha` 之外的简写，前者根本拿不到 0.1.6。
+- 用镜像部署则改用新 tag：`DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v0.4.4-dsh-0.1.6-alpha.1`
+  （或继续跟随 `:latest`）。
+- **会话数据格式**：0.1.5 → 0.1.6 可能包含不可回读的数据迁移。按 §备份 惯例，升级前请备份
+  程序 / 数据 / 工作区三个卷，以便按 docs/zh-CN/03-升级与维护.md 回滚。
+- **自定义插件需留意**（若你装了第三方插件）：0.1.6 将服务名 `codeRuntime` 改名为 `ptcRuntime`，
+  工作流执行器 `dsh-workflow-worker-thread` 改为 `dsh-workflow-ptc`，且 `tool-ralph` 默认关闭。
+  注入旧服务名的插件会激活失败。dsh-docker 的救生舱与自愈可兜底，但仍建议先在测试环境验证。
+- 详细变更分析见 `issues/2026-09-15-dsh-0.1.6-alpha.1-适配分析.md`。
+
+## [v0.4.3-dsh-0.1.5-rc.2] - 2026-09-15
 ### Fixed
 - **证据链尾部丢失（`logtag.js` / `logtee.js`）**：两者在 stdin 关闭时调用 `process.exit(0)`，
   而 stdout 接管道时是**异步**的，缓冲区里可能还压着大量未刷出的数据 —— 强退会直接丢弃它们。
