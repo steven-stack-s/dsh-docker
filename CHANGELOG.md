@@ -1,10 +1,65 @@
 # 更新日志 (Changelog)
 
-本项目的版本遵循双版本 tag 约定：`v<项目版本>-dsh<dsh版本>`，如 `v0.3.0-dsh0.1.2-rc.1`，其中后缀为构建时锁定的 DSH 版本（见 Dockerfile 的 `ARG DSH_VERSION`）。推送匹配 `v*` 的 tag 会触发 GitHub Actions 自动构建多架构镜像并发布到 ghcr.io（见 .github/workflows/docker-image.yml）。
+本项目的版本遵循双版本 tag 约定：`v<项目版本>-dsh-<dsh版本>`，如 `v0.3.0-dsh-0.1.2-rc.1`，其中后缀为构建时锁定的 DSH 版本（见 Dockerfile 的 `ARG DSH_VERSION`）。推送匹配 `v*` 的 tag 会触发 GitHub Actions 自动构建多架构镜像并发布到 ghcr.io（见 .github/workflows/docker-image.yml）。
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [v0.4.2-dsh0.1.5-rc.2] - 2026-09-14
+## [v0.4.3-dsh-0.1.5-rc.2] - 2026-09-15
+
+### Fixed
+- **证据链尾部丢失（`logtag.js` / `logtee.js`）**：两者在 stdin 关闭时调用 `process.exit(0)`，
+  而 stdout 接管道时是**异步**的，缓冲区里可能还压着大量未刷出的数据 —— 强退会直接丢弃它们。
+  实测 20001 行输入只留下 **8712 行（丢 56%）**，且**尾部（往往正是崩溃原因）整段消失**，
+  diagnose 拿不到证据只能 report-only，表现为「自愈偶尔不灵」且日志上完全看不出原因。
+  改为 `process.exitCode = 0`，让 Node 在 stdout 自然排空后退出；修复后 20001 行完整保留。
+- **`test-compose-wiring.sh` 的门禁与文档分层脱节**：`.env.example` 精简为日常 12 项后，
+  高级变量迁到 `docs/07-环境变量速查表`，但门禁仍只认 `.env.example` —— 于是必然红灯。
+  改为「`.env.example` 或 07 速查表任一命中」即通过（.env.example 用 `^VAR=` 锚定，
+  速查表用反引号/表格列锚定，避免子串误判）。**不变式仍是「代码读的变量必须有文档」**，
+  已用「注入一个未文档化变量必须变红」反向验证门禁未被削弱。
+- **快照/回滚遗漏 `.dsh-module-fallback`**：DSH 的 bundle 包解析会在 profile 下维护该目录，
+  而 `profile/node_modules` 里的 bundle 条目往往是指向它的**符号链接**。旧实现只快照
+  `node_modules` + 三个配置文件，回滚后链接还在、目标没了 —— 表现为「回滚成功但 profile 起不来」，
+  比不回滚更糟（消耗了自愈预算、改了树、还没修好）。现随 `node_modules` 一并纳入快照与还原事务。
+
+### Changed
+- **tag 格式改为 `v<X.Y.Z>-dsh-<X.Y.Z>`（`-dsh-` 两侧都有连字符）**：此前为 `-dsh` 紧贴版本号
+  （如 `v0.4.2-dsh0.1.5-rc.2`）。**旧格式不再被接受**：`ci-image-tags.sh` 的正则同步收紧，
+  旧格式 tag 会直接报错退出（不再静默切分出错误版本）。
+  仓库内 15 个历史 tag 已全部按新格式重建并推送（指向的 commit、annotated 的 message/tagger/
+  时间戳、lightweight 类型均原样保留），CHANGELOG 历史标题与 README/workflow/compose 中的示例同步更新。
+  > ⚠️ **升级注意**：远端 15 个旧格式 tag 已删除、新格式 tag 已推送（不可逆）。
+  > 已用旧 tag 拉取镜像的部署不受影响（ghcr 上已有镜像仍可拉取），但旧 tag 名不再可用；
+  > 引用过旧 tag 的脚本 / 文档 / 书签需要改为新格式。
+- **`Dockerfile` 的 `ARG DSH_VERSION` 由 `latest` 改为显式版本号（`0.1.5-rc.2`）**：
+  npm 的 dist-tag 是发布者**手动指定**的别名、不会自动前进，且默认值会随 npm 上的 tag 变动而
+  **静默漂移**（同一份 Dockerfile 在不同时间构建出不同版本）。改后 `docker build` 与
+  `docker compose build` 在不传 `DSH_VERSION` 时产出一致的 dsh 版本。
+- **`.env.example` 精简为 12 项日常变量**：`docker-compose.yml` 不变（所有变量仍以 `${VAR:-default}` 兜底存在）。
+  原 35 项里 25 项高级调优（`RESCUE_*` 细节、`NODE_MAX_OLD_SPACE`、`PIDS_LIMIT`、`SOCAT_MAX_CHILDREN`、
+  `NPM_REGISTRY`、`TZ`、`DEEPSEEK_API_KEY_FILE` 等）从 `.env.example` 移除，**默认值不变**。
+  保留：`DEEPSEEK_API_KEY`、`DSH_IMAGE`、`DSH_CONTAINER_NAME`、`DSH_PORT`、三个挂卷目录、
+  `DSH_TRUSTED_HOSTS`、`MEM_LIMIT`、`CPU_LIMIT`、`RESCUE`、`RESCUE_AUTO`。
+
+### Added
+- `scripts/t/test-module-fallback-snapshot.sh`：锁定 `.dsh-module-fallback` 必须随 `node_modules`
+  一起快照/还原（见上方 Fixed）。含 6 条断言，并用「回放去掉修复的实现必红」验证其确实能捕获回归。
+- **`probe-ready.js` 的 L4 失败文案新增 `/required startup failure/i`**：DSH 0.1.6 起把启动失败
+  分为「必需条目」与「可选条目」，前者用该文案。不补则「必需插件挂了但 HTTP 仍返回 200」会被漏判成健康。
+- `docs/zh-CN/07-环境变量速查.md` 与 `docs/en/07-environment-variables.md`：高级变量完整速查表
+  （按 RESCUE / 资源限制 / 构建 / 工具链 / 凭据分组，含默认值与覆盖方式），并列出两个常见的覆盖方式
+  （改 compose 默认值 / 在 `.env` 追加同名变量）。README 中/英文快速开始与文档索引同步指向此文件。
+
+### 升级注意
+- **老用户 `.env` 里手动设过的非保留项（如 `RESCUE_KEEP`、`RESCUE_SNAPSHOT_MODE`）将被忽略**：
+  `docker compose` 解析不到 `.env` 里的这些键就会走 compose 中的默认值。若你之前调过这些变量，
+  升级后请二选一：
+  - 把这些变量移到 `docker-compose.yml` 的 `environment:` 段（推荐 —— 更直观）；
+  - 或保留在 `.env` 文件里（compose 中没有 `${VAR:-...}` 引用则不会进容器，需手动加到 compose）；
+  - 或临时一次性覆盖：`VAR=value docker compose up -d`。
+- `.env.example` 行数 103 → 51，**部署行为零变化**（默认值未改）。
+
+## [v0.4.2-dsh-0.1.5-rc.2] - 2026-09-14
 
 ### Fixed
 - **`prune` 不再把唯一的健康基线挤出窗口**：`rescue_prune()` 现在钉住**最新一份** `boot-healthy` 基线快照（reason 形如 `boot-healthy*`），
@@ -14,21 +69,21 @@
   新增 `scripts/t/test-prune-pin-baseline.sh`（5 组用例：基线为最老一份必须留下 / 无基线时行为不变 / 多份基线只钉最新 / 全基线仍能减员 / KEEP 已满足时不动）。
   文档同步：`docs/{zh-CN,en}/06` 参数表与新增「快照保留」说明、`.env.example` 两处注释。
 
-## [v0.4.1-dsh0.1.5-rc.2] - 2026-09-13
+## [v0.4.1-dsh-0.1.5-rc.2] - 2026-09-13
 
 > 例行跟版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.1` 升至 `0.1.5-rc.2`（npm 于 2026-09-10 发布，dist-tag `next`）。
 > 本仓库的部署逻辑与 v0.4.0 完全一致 —— entrypoint / 自愈救援体系未做任何改动。
 
 ### Changed
-- **锁定 DSH 版本 `0.1.5-rc.1` → `0.1.5-rc.2`**：CI 依 tag 后缀解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故 `v0.4.1-dsh0.1.5-rc.2` 构建出的镜像 seed 内即为 0.1.5-rc.2；发布门禁 3（镜像自证）会在构建后用镜像内 `/opt/dsh-seed/bin/dsh --version` 断言与 tag 后缀一致。`docker-compose.yml` 中本地构建的默认值 `DSH_VERSION` 同步跟进。
-- **文档 tag 示例同步**：README（中/英）的 DSH 版本徽章更新为 `0.1.5-rc.2`；README、`docker-compose.yml` 注释与 workflow 注释中的示例 tag 改为 `v0.4.1-dsh0.1.5-rc.2`。此徽章此后由 tag 构建成功后的 `scripts/update-dsh-badge.sh` 自动同步，无需手工维护。
+- **锁定 DSH 版本 `0.1.5-rc.1` → `0.1.5-rc.2`**：CI 依 tag 后缀解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故 `v0.4.1-dsh-0.1.5-rc.2` 构建出的镜像 seed 内即为 0.1.5-rc.2；发布门禁 3（镜像自证）会在构建后用镜像内 `/opt/dsh-seed/bin/dsh --version` 断言与 tag 后缀一致。`docker-compose.yml` 中本地构建的默认值 `DSH_VERSION` 同步跟进。
+- **文档 tag 示例同步**：README（中/英）的 DSH 版本徽章更新为 `0.1.5-rc.2`；README、`docker-compose.yml` 注释与 workflow 注释中的示例 tag 改为 `v0.4.1-dsh-0.1.5-rc.2`。此徽章此后由 tag 构建成功后的 `scripts/update-dsh-badge.sh` 自动同步，无需手工维护。
 
 ### 升级注意（0.1.5-rc.1 → 0.1.5-rc.2）
 - 容器内部署（程序装在卷上）无需重建镜像：`docker exec dsh npm install -g @deepseek-ai/dsh@0.1.5-rc.2 && docker restart dsh`。
-- 用镜像部署则改用新 tag：`DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v0.4.1-dsh0.1.5-rc.2`（或继续跟随 `:latest`）。
+- 用镜像部署则改用新 tag：`DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v0.4.1-dsh-0.1.5-rc.2`（或继续跟随 `:latest`）。
 - 同一 minor 内的预发布迭代，仍建议按惯例在升级前备份整个部署目录（程序 / 数据 / 工作区三个卷），以便按 docs/zh-CN/03-升级与维护.md 回滚。
 
-## [v0.4.0-dsh0.1.5-rc.1] - 2026-09-12
+## [v0.4.0-dsh-0.1.5-rc.1] - 2026-09-12
 
 > 本版是一次大范围的自愈体系加固：8 个 P0、12 个 P1 与主要 P2 全部修复，落地 14 个新功能点，
 > 并做了真实 Docker 宿主上的端到端验证（见下方各 Wave 小节与 issues/2026-dsh-docker-v0.3.7-深度评估.md）。
@@ -42,7 +97,7 @@
 - **`rescue_restore` 的失败不再被当成成功（独立评审发现）**：此前函数最后一条命令是 `rescue_log`（几乎恒成功），于是 `cp` 失败也返回 0 —— 自愈据此记 `rollback ok`、消耗预算，而插件树实际只被 `rm -rf` 删掉、并未恢复。现在关键拷贝失败即 `return 1`，`rescue_do_heal` 如实记 `fail` 并转 report-only；CLI 的 `rescue rollback` 失败也不会再打印 "restored"。新增 `scripts/t/test-librescue-restore.sh`（并用"回放旧实现必红"验证该测试确实能捕获它）。
 - **CI 镜像自证步骤修正（独立评审发现）**：`docker run <img> <cmd>` 在本镜像（`ENTRYPOINT ["dsh-entrypoint"]`）下只会把 `<cmd>` 当作 CMD 追加给 entrypoint，而 entrypoint 不消费 `$@` —— 那会照常走 seed/socat 并真的启动 dsh web：起得来就永不返回（CI 挂死），起不来也要等满自愈窗口。已改为 `--entrypoint /opt/dsh-seed/bin/dsh`，失败时保留 smoke 的 stderr；两个 job 各加 `timeout-minutes` 作纵深防御。
 - **发布串行化分组修正（独立评审发现）**：`concurrency.group` 原按 `github.ref` 分组，而 `:latest` 是所有 tag 构建**共享**的输出、各 tag 的 ref 互不相同 → 根本不排队。改为全局单组 `image-publish`。
-- **tag 形态校验收紧（独立评审发现）**：`v0.3.7-dsh0`、`v0.3.7-dsh-note-dsh0.1.5`、`v0.1.0-dsh0.1.2-rc.1+build` 此前都能通过校验（分别导致 npm 按 0.x 解析、切分出 `-note-dsh0.1.5`、Docker tag 含非法 `+`）。现要求 `v<X.Y.Z>-dsh<X.Y.Z>[-预发布]`，字符集限定为 Docker tag 允许的 `[A-Za-z0-9_.-]`；分支 slug 同步做字符清洗。
+- **tag 形态校验收紧（独立评审发现）**：`v0.3.7-dsh-0`、`v0.3.7-dsh-note-dsh0.1.5`、`v0.1.0-dsh-0.1.2-rc.1+build` 此前都能通过校验（分别导致 npm 按 0.x 解析、切分出 `-note-dsh0.1.5`、Docker tag 含非法 `+`）。现要求 `v<X.Y.Z>-dsh-<X.Y.Z>[-预发布]`，字符集限定为 Docker tag 允许的 `[A-Za-z0-9_.-]`；分支 slug 同步做字符清洗。
 - **分支构建不再复用 gha 缓存**：分支构建的 `DSH_VERSION=latest` 是固定字符串，缓存会让 `npm install -g @deepseek-ai/dsh@latest` 那一层命中旧缓存、不再跟随 npm 上的最新版（与 workflow 注释承诺冲突）。tag 构建仍启用缓存以加速可复现构建。
 - **文档更正救生舱日志标记**：`lifeboat enter` 只写在 `rescue.log`，docker logs 里是 `booting clean lifeboat profile`（中英 04/06 共四处 + e2e 注释）。
 
@@ -130,7 +185,7 @@
 - `rescue-supervise.sh` 的探针路径支持 `RESCUE_PROBE` 覆盖并回退仓库布局（内部钩子，供测试与非镜像布局使用；镜像内 `/opt/dsh-rescue/probe-ready.js` 恒在，正常部署行为不变）。
 - 文档与实现对齐：06-救援模式（中英）更正"救生舱自动降级"（当前只有手动 `RESCUE=1`）、`RESCUE_AUTO` 语义、自愈预算的实际生命周期（预算落在持久卷 state/selfheal.json，跨重启累计，而非"单容器生命周期内"）；04-故障排查不再让用户 grep 源码中不存在的 `rolling back`。
 
-## [v0.3.7-dsh0.1.5-rc.1] - 2026-09-10
+## [v0.3.7-dsh-0.1.5-rc.1] - 2026-09-10
 
 ### Added
 - **`probe-ready.js` 分层就绪探测**：启动窗口的健康判定由「TCP 端口可连接」扩展为三层——**L1** TCP 监听、**L2** 在其上完成一次 HTTP 往返、**L3** 连续 `--stable`(默认 2) 次成立。退出码契约不变（exit 0 = 就绪），`rescue-supervise.sh` 的调用语义零变更。
@@ -142,7 +197,7 @@
 ### 已知边界
 - **覆盖不到「服务端正常、但浏览器端客户端插件树激活失败」**（如 0.1.2→0.1.5 升级后首启出现的 `25 entries did not activate`）：该类审计只在浏览器端（`dsh-web-frontend`）执行，服务端的端口、HTTP 与客户端模块清单全程正常，探针无从取得差异信号。端到端覆盖需无头浏览器，代价是镜像 +数百 MB、启动变慢十几秒。
 
-## [v0.3.6-dsh0.1.5-rc.1] - 2026-09-10
+## [v0.3.6-dsh-0.1.5-rc.1] - 2026-09-10
 
 镜像锁定的 DSH 版本由 `0.1.2-rc.1` 升级至 `0.1.5-rc.1`（tag 后缀同步变更）。CI 依 tag 解析 `DSH_VERSION`（`.github/workflows/docker-image.yml`），故镜像 seed 内即为 0.1.5-rc.1。
 
@@ -152,14 +207,14 @@
 ### 升级注意（0.1.2-rc.1 → 0.1.5-rc.1）
 - 该跨度含**破坏性变更**：会话数据格式升级至 V3（迁移后**旧版不可读**，原文件保留）；插件 Agent API 移除 `ctx.agent`；`Inbox` 改为类型接口；Web 插件面板 Slot 由 `conversation` 迁移为 `main` 的 `conversation` key（原 Detail 面板移除）；Web `minimal` 默认仅提供持久 shell。升级前请确认 profile 内第三方插件已适配新核心。
 
-## [v0.3.5-dsh0.1.2-rc.1] - 2026-09-10
+## [v0.3.5-dsh-0.1.2-rc.1] - 2026-09-10
 
 ### Added
 - **健康基线快照**：entrypoint 在确认 dsh 健康后自动拍一份基线（`RESCUE_SNAPSHOT_ON_HEALTHY=off` 可关）。插件市场（`dshmarket` 在 dsh 进程内直接改 profile 的 package.json/node_modules）**绕过 rescue 封装、不会拍预防性快照**，此前市场更新后启动失败只能 report-only；现由「变更前已有的健康基线」充当回退点，自愈可自动 rollback 恢复。仅在已被证明可启动的状态下拍，失败不影响启动，并在 rescue.log 记 re-baselining 审计（含 profile 指纹变化提示）。
 
 ### Fixed
 - **快照编号重用 + 「最新/最老」按字典序误判**（会导致自愈回滚到错误快照）：`next_snap_name` 由「找第一个空缺编号」改为「最大编号 + 1」（prune 删除后不再复用编号）；新增 `rescue_snapshot_newest/oldest`（按 meta.created 排序，缺失回退目录 mtime），`diagnose.js` 的最新快照选取、supervise 的 `newest_snap` / 基线 / remove-escalate 目标、`rescue rollback` 与 `rescue_prune` 全部改用它。真机复现：补位编号下旧快照被当成最新。
-## [v0.3.4-dsh0.1.2-rc.1] - 2026-09-09
+## [v0.3.4-dsh-0.1.2-rc.1] - 2026-09-09
 
 架构评审 1-7 修复（评审全文与逐项记录：`issues/2026-dsh-docker-架构评审与修复记录.md`）。
 
@@ -174,20 +229,20 @@
 - **NODE_OPTIONS 与 MEM_LIMIT 联动说明（#5）**：`.env.example` 与 compose 注明 DSH 多进程 RSS 显著超堆值、堆值须远小于 MEM_LIMIT 及 OOM-kill 症状与配比示例。
 - **image 默认与 build DSH_VERSION 口径（#6）**：compose 注释 + README 明确默认 `:latest` 跟随最近 tag 发布、锁版用 `DSH_IMAGE=v<项目>-dsh<dsh版本>`、pull 与本地 build 两个来源勿混用。
 
-## [v0.3.3-dsh0.1.2-rc.1] - 2026-09-09
+## [v0.3.3-dsh-0.1.2-rc.1] - 2026-09-09
 
 ### Changed
 - **方案 A 重构：entrypoint 拆分**——`entrypoint.sh` 由 386 行减为 148 行薄壳（只承担 PID1 生命周期与依赖准备）；归因自愈编排（证据捕获 / diagnose / incident / budget / 自愈执行器）与监督主循环抽到新 `scripts/rescue-supervise.sh`，由 entrypoint source 后调 `rescue_supervise()`。行为零漂移（三重逐字等价 + source 契约测试 + 真机回归），Dockerfile 同步 COPY。
-## [v0.3.2-dsh0.1.2-rc.1] - 2026-09-09
+## [v0.3.2-dsh-0.1.2-rc.1] - 2026-09-09
 
 ### Added
 - **日志逐行加时间戳**：entrypoint 消息经新 `elog()` 加前缀 `[YYYY-MM-DDTHH:MM:SS±HHMM]`（与 rescue.log 同格式）；dsh 应用输出经新 `scripts/logtag.js` 行过滤器（fifo → logtag | tee）同样逐行带时间戳，docker logs 与 evidence/dsh.log 同步生效；logtag 缺失时降级为原 tee 直连。entrypoint.sh 修正为可执行模式。
-## [v0.3.1-dsh0.1.2-rc.1] - 2026-09-08
+## [v0.3.1-dsh-0.1.2-rc.1] - 2026-09-08
 
 ### Fixed
 - **恢复 healthy 后的完整容器日志**：v0.3.0 的 tee 证据捕获在健康路径调 `rescue_close_ev` 杀掉了 fifo 唯一读端（tee），导致 dsh 在 healthy 之后的所有 stdout 输出无读者而被丢弃——`docker logs` 里 dsh 日志消失（长期还会填满 fifo 缓冲阻塞写端）。现在 healthy 后仅释放 entrypoint 自身写端，tee 持续把 dsh 输出转发到容器日志与证据文件，dsh 退出（EOF）后 tee 自然收尾；boot 失败路径语义不变。
 - 新增 `rescue_evidence_prune`：按 `RESCUE_KEEP` 修剪 `evidence/boot-*`，防止 healthy 会话持续镜像的 dsh.log 无限累积。
-## [v0.3.0-dsh0.1.2-rc.1] - 2026-09-08
+## [v0.3.0-dsh-0.1.2-rc.1] - 2026-09-08
 
 插件**救援体系**完整落地：在 v0.2.0 的「自动回退 + 救生舱」之上，补齐**自动排查 / 根因归因 / 智能自愈**闭环（rescue-diagnose），并新增配套文档与宿主机验收脚本。全程严守红线：只动插件树四件套与 `$DSH_HOME/.rescue`，绝不自动改 `cordis.patch.yml`、会话 / 记忆 / 配置 / 凭据。
 
@@ -208,27 +263,27 @@
 ### Docs
 - 记录真机实测边界：`remove-plugin` 经 `dsh plugin remove` 只清 `dependencies`、不清 `dsh.profile.bundles`；对 bundles 条目型启动故障会如实降级 report-only，可靠自愈是 rollback（见 06-救援模式.md §4b-1）。
 
-## [v0.2.0-dsh0.1.2-rc.1] - 2026-09-07
+## [v0.2.0-dsh-0.1.2-rc.1] - 2026-09-07
 
 ### Added
 - 插件**救援模式**设计定稿与实施计划（docs/superpowers/specs|plans 2026-09-07-rescue-mode）：自动回退 + 救生舱（lifeboat）干净 profile 模板；entrypoint 监督式启动 + 自动回滚；`rescue` 命令集初版。
 - Dockerfile 正确复制 lifeboat.tmpl 到子目录（mkdir + `dir/.`）；加 openssh-client；rescue.log 审计完整性。
 - 救援模式文档 + 端到端验收脚本；修正 .env.example 的 RESCUE_AUTO 语义注释。
 
-## [v0.1.2-dsh0.1.2-rc.1] - 2026-09-06
+## [v0.1.2-dsh-0.1.2-rc.1] - 2026-09-06
 
 ### Fixed
 - socat 转发上游加 forever+interval 重试，避免 dsh 尚未就绪时出现 Connection refused。
 
-## [v0.1.1-dsh0.1.2-rc.1] - 2026-09-03
+## [v0.1.1-dsh-0.1.2-rc.1] - 2026-09-03
 
 ### Fixed
 - 修复 `/api` 通道 Host 信任围栏导致的连接异常，新增 `DSH_TRUSTED_HOSTS` 白名单参数。
 
-## [v0.1.0-dsh0.1.2-rc.1] - 2026-09-03
+## [v0.1.0-dsh-0.1.2-rc.1] - 2026-09-03
 
 ### Changed
-- 双版本 tag 约定（`v<项目版本>-dsh<dsh版本>`），镜像 label 写入两个版本号；tag 名映射 DSH_VERSION，镜像 seed 与 dsh 版本保持一致。
+- 双版本 tag 约定（`v<项目版本>-dsh-<dsh版本>`），镜像 label 写入两个版本号；tag 名映射 DSH_VERSION，镜像 seed 与 dsh 版本保持一致。
 
 ### Fixed
 - 复制 seed 后清理 `/opt/dsh-seed`，避免容器内重复副本；兼容 Windows 开发的 CRLF 换行；支持本地构建并锁定 dsh 版本。
