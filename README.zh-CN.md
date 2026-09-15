@@ -7,7 +7,6 @@
 [![GHCR 镜像](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.2-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
 [![MIT 许可证](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
-[![Stars](https://img.shields.io/github/stars/steven-stack-s/dsh-docker?color=5965d8)](https://github.com/steven-stack-s/dsh-docker/stargazers)
 
 > 在**任意 Docker 环境**（Linux 服务器 / NAS / 云主机 / Docker Desktop）一键部署
 > [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）——DeepSeek 官方的 AI 编程 Agent 框架（Web UI + CLI）。
@@ -38,13 +37,17 @@
 ```bash
 # 1. 拉取仓库并配置
 git clone https://github.com/steven-stack-s/dsh-docker.git && cd dsh-docker
-cp .env.example .env            # 编辑 .env，填入 DEEPSEEK_API_KEY
+cp .env.example .env            # 编辑 .env，填入 DEEPSEEK_API_KEY（其余可保持默认）
 
 # 2. 启动（首次启动从镜像内 seed 复制 DSH，秒级就绪）
 docker compose up -d
 
 # 3. 访问 —— docker logs dsh 会打印一次性 token；首次访问 http://<主机IP>:3080/?token=<token>（之后无需再带）
 ```
+
+> 💡 `.env.example` 只列了日常部署用得到的 12 项；自愈细节、资源调优、npm 镜像、密钥文件挂载等高级变量
+> 的默认值已写在 `docker-compose.yml` 的 `${VAR:-default}` 兜底里，需要时直接编辑 `docker-compose.yml`，
+> 或在 `.env` 追加同名变量覆盖。完整速查见 [docs/zh-CN/07-环境变量速查.md](docs/zh-CN/07-环境变量速查.md)。
 
 详细步骤见 [docs/zh-CN/01-快速开始.md](docs/zh-CN/01-快速开始.md)。
 
@@ -60,6 +63,7 @@ docker compose up -d
 | [docs/zh-CN/04-故障排查.md](docs/zh-CN/04-故障排查.md) | 常见问题 |
 | [docs/zh-CN/05-平台差异.md](docs/zh-CN/05-平台差异.md) | Linux / NAS / Docker Desktop 差异 |
 | [docs/zh-CN/06-救援模式.md](docs/zh-CN/06-救援模式.md) | 插件救援：自动回退 + **自动排查 / 根因归因 / 智能自愈** + 救生舱，含 `rescue report` 事故审阅 |
+| [docs/zh-CN/07-环境变量速查.md](docs/zh-CN/07-环境变量速查.md) | 高级调优变量完整速查（默认值、用途、覆盖方式） |
 
 ---
 

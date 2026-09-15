@@ -7,7 +7,6 @@
 [![GHCR](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.2-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
 [![License](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
-[![Stars](https://img.shields.io/github/stars/steven-stack-s/dsh-docker?color=5965d8)](https://github.com/steven-stack-s/dsh-docker/stargazers)
 
 > Deploy [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) — DeepSeek's official AI coding agent framework (Web UI + CLI) — on **any Docker environment** with one command.
 
@@ -37,13 +36,18 @@
 ```bash
 # 1. Clone and configure
 git clone https://github.com/steven-stack-s/dsh-docker.git && cd dsh-docker
-cp .env.example .env            # edit .env, fill in DEEPSEEK_API_KEY
+cp .env.example .env            # edit .env, fill in DEEPSEEK_API_KEY (the rest can stay at defaults)
 
 # 2. Start (on first boot, DSH is copied from the in-image seed; ready in seconds)
 docker compose up -d
 
 # 3. Access — docker logs dsh prints a one-time token; first visit http://<host-ip>:3080/?token=<token> (later visits need no token)
 ```
+
+> 💡 `.env.example` only lists the 12 vars used in daily deployment. Advanced knobs (self-heal details, resource
+> tuning, npm registry, key-file mount, etc.) are defaulted in `docker-compose.yml` via `${VAR:-default}` — edit
+> the compose file when you need them, or override in `.env` by adding the same variable. See the full reference:
+> [docs/en/07-environment-variables.md](docs/en/07-environment-variables.md).
 
 Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 
@@ -59,6 +63,7 @@ Detailed steps: [docs/en/01-quick-start.md](docs/en/01-quick-start.md)
 | [docs/en/04-troubleshooting.md](docs/en/04-troubleshooting.md) | Troubleshooting |
 | [docs/en/05-platform-differences.md](docs/en/05-platform-differences.md) | Linux / NAS / Docker Desktop differences |
 | [docs/en/06-rescue-mode.md](docs/en/06-rescue-mode.md) | Plugin rescue: auto-rollback + **auto-diagnose / root-cause / smart self-heal** + lifeboat, with `rescue report` incident review |
+| [docs/en/07-environment-variables.md](docs/en/07-environment-variables.md) | Full reference for advanced env vars (default, purpose, override method) |
 
 ---
 
