@@ -401,6 +401,21 @@ printf 'cur\n' > "$evroot/boot-1-20260101T000002/dsh.log"
 touch -t 202601010000.00 "$evroot/boot-2-20260101T000000"
 touch -t 202601010000.01 "$evroot/boot-1-20260101T000001"
 touch -t 202601010000.02 "$evroot/boot-1-20260101T000002"
+# 必须显式清掉 RESCUE_EVIDENCE_KEEP：rescue_evidence_prune 的保留数取值是
+#   _evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
+# 即 RESCUE_EVIDENCE_KEEP 优先。本用例只设了 RESCUE_KEEP，若运行环境里恰好已有
+# RESCUE_EVIDENCE_KEEP（例如在 dsh-docker 容器内开发 / 在 CI 上跑时，entrypoint 会把它
+# 导出为 3），保留数就变成 3、3 个目录一个都不删，断言随即误报
+# FAIL-c8-prune-kept-oldest-by-mtime。用例应自给自足，不依赖外部环境是否干净。
+# 必须显式清掉 RESCUE_EVIDENCE_KEEP：rescue_evidence_prune 的保留数取值是
+#   _evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
+# 即 RESCUE_EVIDENCE_KEEP 优先。本用例只设了 RESCUE_KEEP，若运行环境里恰好已有
+# RESCUE_EVIDENCE_KEEP（在 dsh-docker 容器内开发、或在 CI 上跑时，entrypoint 会把它
+# 导出为 3），保留数就变成 3、3 个目录一个都不删，断言随即误报
+# FAIL-c8-prune-kept-oldest-by-mtime。用例应自给自足，不依赖外部环境是否干净。
+# 注：用 unset 而非 `env -u ... rescue_evidence_prune` —— 后者在子 shell 里执行，
+# 而 rescue_evidence_prune 是 shell 函数，子 shell 中不可见，会静默什么都不做。
+unset RESCUE_EVIDENCE_KEEP
 RESCUE_KEEP=2 rescue_evidence_prune "$evroot/boot-1-20260101T000002"
 [ -d "$evroot/boot-1-20260101T000002" ] || { echo 'FAIL-c8-prune-deleted-current-evidence'; exit 1; }
 [ -d "$evroot/boot-2-20260101T000000" ] && { echo 'FAIL-c8-prune-kept-oldest-by-mtime'; exit 1; }
