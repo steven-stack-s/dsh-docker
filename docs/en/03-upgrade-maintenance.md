@@ -11,6 +11,22 @@ docker exec dsh npm install -g @deepseek-ai/dsh@<新版本>
 docker restart dsh
 ```
 
+### Always spell out the full version (do not use `latest` / `next`)
+
+npm dist-tags are **manually assigned** aliases maintained by the publisher — they do **not** advance
+automatically, and the three tags can point at three different versions:
+
+| tag | Has pointed at | Meaning |
+|---|---|---|
+| `latest` | `0.1.5-rc.1` | Stable recommendation — **may lag behind `next`** |
+| `next` | `0.1.5-rc.2` | Newer candidate |
+| `alpha` | `0.1.6-alpha.1` | Preview |
+
+> ⚠️ So `npm install -g @deepseek-ai/dsh@latest` does **not** get you the newest version, and never gets
+> you an alpha. Always pass the full version: `@0.1.6-alpha.1`. Verify with `docker exec dsh dsh --version`.
+
+> 💡 Check where the tags currently point: `docker exec dsh npm view @deepseek-ai/dsh dist-tags`.
+
 > ⚠ **Back up first** (see §5): a cross-major upgrade can include an **irreversible** data-format change —
 > for example `0.1.2-rc.1 → 0.1.5-rc.1` migrates sessions to V3, after which the **old version can no
 > longer read** them (the files remain, but the new format is not understood by the old version). So when
