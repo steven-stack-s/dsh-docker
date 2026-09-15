@@ -16,4 +16,8 @@ function ts() {
 }
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on('line', line => process.stdout.write(ts() + ' ' + line + '\n'));
-rl.on('close', () => process.exit(0));
+// 必须在 close 时【不】调用 process.exit()：stdout 接管道时是异步的，缓冲区里可能还压着
+// 上万行未刷出。process.exit() 会立即终止进程并丢弃这些数据 —— 实测 20001 行输入只留下
+// 8712 行（丢 56%），且**尾部（往往正是崩溃原因）整段丢失**，diagnose 拿不到证据只能 report-only。
+// 改用 exitCode 让 Node 在事件循环自然排空（stdout flush 完）后退出。
+rl.on('close', () => { process.exitCode = 0; });

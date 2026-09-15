@@ -34,4 +34,7 @@ rl.on('line', (line) => {
   if (fd) { try { fs.writeSync(fd, out); size += Buffer.byteLength(out); } catch (e) {} }
   if (size > maxBytes) rotate();
 });
-rl.on('close', () => { if (fd) { try { fs.closeSync(fd); } catch (e) {} } process.exit(0); });
+// 同 logtag：close 时绝不能用 process.exit() —— stdout 接管道时可能仍有未刷出的数据，
+// 强退会丢尾部（容器日志 docker logs 少最后一段）。证据文件本身是 writeSync 同步落盘，
+// 故这里只需保证 fd 关闭后让进程自然退出。
+rl.on('close', () => { if (fd) { try { fs.closeSync(fd); } catch (e) {} } process.exitCode = 0; });
