@@ -67,9 +67,23 @@ jobs:
             else
               echo FAIL
               cat /tmp/unit-test.out
+              # 失败详情同时写入 job summary：CI 日志需管理员权限才能读取，
+              # 而 summary 可经 API 获取，便于定位（本地全绿 / CI 红时的唯一线索）。
+              {
+                echo "### FAIL: $(basename "$f")"
+                echo '```'
+                cat /tmp/unit-test.out
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
               fail=1
             fi
           done
+          {
+            echo "### 环境"
+            echo "- node: $(node --version 2>&1)"
+            echo "- sh: $(readlink -f /bin/sh)"
+            echo "- leaked RESCUE_*: $(env | grep -c "^RESCUE_" || true)"
+          } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
 
   build-and-push:
