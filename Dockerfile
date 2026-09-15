@@ -14,9 +14,19 @@
 
 FROM node:24-slim
 
-# 构建时锁定的 dsh / pnpm 版本（默认 latest，构建阶段解析为当时 npm 上的最新版并固化进镜像）
-# 用 build-arg 覆盖即可固定版本：--build-arg DSH_VERSION=1.2.3
-ARG DSH_VERSION=latest
+# 构建时锁定的 dsh / pnpm 版本。用 build-arg 覆盖即可换版本：--build-arg DSH_VERSION=1.2.3
+#
+# 【为什么不用 latest】npm 的 dist-tag 是发布者手动指定的别名，**不会自动前进**：
+#   latest -> 0.1.5-rc.1    （稳定推荐版，落后于 next）
+#   next   -> 0.1.5-rc.2    （更新的候选版）
+#   alpha  -> 0.1.6-alpha.1
+# 用 latest 会带来两个真问题：
+#   1) 与 docker-compose.yml 的默认值不一致 —— 不传 DSH_VERSION 时，
+#      docker build 与 docker compose build 会产出不同 dsh 版本的镜像；
+#   2) 默认值随 npm 上的 tag 变动而静默漂移，同一份 Dockerfile 在不同时间构建出不同版本。
+# 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
+# 注意：若要用 alpha 版本，必须写全版本号（如 0.1.6-alpha.1）—— latest/next 都拿不到它。
+ARG DSH_VERSION=0.1.5-rc.2
 ARG PNPM_VERSION=latest
 
 # 可选 apt 镜像源（国内构建加速）：传 --build-arg APT_MIRROR=mirrors.aliyun.com 启用；
