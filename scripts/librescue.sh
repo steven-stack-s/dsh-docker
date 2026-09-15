@@ -120,6 +120,20 @@ rescue_snapshot() {
         || rescue_log "snapshot: cp -a failed ($snap)"
     fi
   fi
+  # DSH 的 bundle 包解析会在 profile 下建 .dsh-module-fallback/node_modules，node_modules 里
+  # 的条目往往是指向它的符号链接。只快照 node_modules 会留下"链接还在、目标没了"的悬空链接，
+  # 回滚后 profile 反而起不来。故随 node_modules 一并纳入（目录不存在时静默跳过）。
+  if [ -d "$pdir/.dsh-module-fallback" ]; then
+    rm -rf "$RESCUE_DIR/$snap/.dsh-module-fallback"
+    if [ "$snap_mode" = copy ]; then
+      cp -a "$pdir/.dsh-module-fallback" "$RESCUE_DIR/$snap/.dsh-module-fallback" 2>/dev/null \
+        || rescue_log "snapshot: .dsh-module-fallback cp -a failed ($snap)"
+    elif ! cp -al "$pdir/.dsh-module-fallback" "$RESCUE_DIR/$snap/.dsh-module-fallback" 2>/dev/null; then
+      rm -rf "$RESCUE_DIR/$snap/.dsh-module-fallback"
+      cp -a "$pdir/.dsh-module-fallback" "$RESCUE_DIR/$snap/.dsh-module-fallback" 2>/dev/null \
+        || rescue_log "snapshot: .dsh-module-fallback cp -a fallback failed ($snap)"
+    fi
+  fi
   th=''
   if [ -d "$RESCUE_DIR/$snap/node_modules" ]; then
     th=$(snapshot_tree_hash "$RESCUE_DIR/$snap/node_modules" 2>/dev/null || printf '')
@@ -350,6 +364,23 @@ rescue_restore() {
       return 1
     fi
   fi
+  # .dsh-module-fallback 与 node_modules 同进同出：node_modules 里的 bundle 条目是指向它的
+  # 符号链接，只还原其一会让链接悬空/指向旧目标。快照里有才还原（老快照不含此目录时跳过）。
+  if [ -d "$_rr_src/.dsh-module-fallback" ]; then
+    _rr_mf_ok=1
+    if [ "$_rr_mode" = copy ]; then
+      cp -a "$_rr_src/.dsh-module-fallback" "$_rr_staging/.dsh-module-fallback" 2>/dev/null || _rr_mf_ok=0
+    elif ! cp -al "$_rr_src/.dsh-module-fallback" "$_rr_staging/.dsh-module-fallback" 2>/dev/null; then
+      rm -rf "$_rr_staging/.dsh-module-fallback"
+      cp -a "$_rr_src/.dsh-module-fallback" "$_rr_staging/.dsh-module-fallback" 2>/dev/null || _rr_mf_ok=0
+    fi
+    if [ "$_rr_mf_ok" != 1 ]; then
+      rescue_log "restore: copy .dsh-module-fallback FAILED ($_rr_snap)"
+      rm -rf "$_rr_staging" "$_rr_bak"
+      rmdir "$_rr_lock" 2>/dev/null || true
+      return 1
+    fi
+  fi
   for _rr_f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
     if [ -f "$_rr_src/$_rr_f" ]; then
       if ! cp "$_rr_src/$_rr_f" "$_rr_staging/$_rr_f" 2>/dev/null; then
@@ -377,9 +408,24 @@ rescue_restore() {
   for _rr_f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
     if [ -e "$_rr_pdir/$_rr_f" ]; then mv "$_rr_pdir/$_rr_f" "$_rr_bak/$_rr_f" 2>/dev/null || true; fi
   done
+  # .dsh-module-fallback 同样先让位（与 node_modules 用同一套 old/bak 事务）
+  _rr_had_mf=0
+  if [ -e "$_rr_pdir/.dsh-module-fallback" ]; then
+    if mv "$_rr_pdir/.dsh-module-fallback" "$_rr_old-mf" 2>/dev/null; then
+      _rr_had_mf=1
+    else
+      rescue_log "restore: cannot move aside .dsh-module-fallback"
+      rm -rf "$_rr_staging" "$_rr_bak" "$_rr_old"
+      rmdir "$_rr_lock" 2>/dev/null || true
+      return 1
+    fi
+  fi
   _rr_ok=1
   if [ -d "$_rr_staging/node_modules" ]; then
     mv "$_rr_staging/node_modules" "$_rr_pdir/node_modules" 2>/dev/null || _rr_ok=0
+  fi
+  if [ "$_rr_ok" = 1 ] && [ -d "$_rr_staging/.dsh-module-fallback" ]; then
+    mv "$_rr_staging/.dsh-module-fallback" "$_rr_pdir/.dsh-module-fallback" 2>/dev/null || _rr_ok=0
   fi
   if [ "$_rr_ok" = 1 ]; then
     for _rr_f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
@@ -389,7 +435,7 @@ rescue_restore() {
     done
   fi
   if [ "$_rr_ok" = 1 ]; then
-    rm -rf "$_rr_old" "$_rr_staging" "$_rr_bak" 2>/dev/null || true
+    rm -rf "$_rr_old" "$_rr_old-mf" "$_rr_staging" "$_rr_bak" 2>/dev/null || true
     rmdir "$_rr_lock" 2>/dev/null || true
     rescue_log "restore done $_rr_snap"
     return 0
@@ -398,15 +444,16 @@ rescue_restore() {
   # ---- ③ 事务回滚：node_modules 与**三个配置文件**一起还原成切换前的状态 ----
   # 旧实现只还原 node_modules：package.json 已换成快照值、pnpm-lock.yaml 替换失败时，live 会停在
   # "半新半旧"的混合状态，日志却谎报 live unchanged（评审实测）。
-  rm -rf "$_rr_pdir/node_modules" 2>/dev/null || true
+  rm -rf "$_rr_pdir/node_modules" "$_rr_pdir/.dsh-module-fallback" 2>/dev/null || true
   if [ "$_rr_had_nm" = 1 ]; then mv "$_rr_old" "$_rr_pdir/node_modules" 2>/dev/null || true; fi
+  if [ "$_rr_had_mf" = 1 ]; then mv "$_rr_old-mf" "$_rr_pdir/.dsh-module-fallback" 2>/dev/null || true; fi
   for _rr_f in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
     if [ -e "$_rr_bak/$_rr_f" ]; then
       rm -f "$_rr_pdir/$_rr_f" 2>/dev/null || true
       mv "$_rr_bak/$_rr_f" "$_rr_pdir/$_rr_f" 2>/dev/null || true
     fi
   done
-  rm -rf "$_rr_staging" "$_rr_bak" "$_rr_old" 2>/dev/null || true
+  rm -rf "$_rr_staging" "$_rr_bak" "$_rr_old" "$_rr_old-mf" 2>/dev/null || true
   rmdir "$_rr_lock" 2>/dev/null || true
   rescue_log "restore: FAILED, live tree restored to its previous state ($_rr_snap)"
   return 1
