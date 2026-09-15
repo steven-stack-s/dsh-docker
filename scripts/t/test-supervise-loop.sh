@@ -157,7 +157,12 @@ fi
 # 原因）会凭空消失，diagnose 拿不到证据只能 report-only —— 归因能力静默降级。
 run_supervise "$T/c7.log" RESCUE_PROBE="$T/probe-fail.js" RESCUE_DIAGNOSE_EVIDENCE=on \
   RESCUE_AUTO=off STUB_DSH_MODE=flood
-evd=$(ls -1d "$DSH_HOME"/.rescue/evidence/boot-* 2>/dev/null | sort | tail -n1)
+# 必须按【创建时间】选最新目录，不能用字典序 sort：目录名是 boot-<attempt>-<ts>，而 attempt
+# 在每次 rescue_supervise 调用时从 1 重新计数。本测试前面几个 case 已经留下了 boot-2-* 目录，
+# 字典序会把 C7 刚建的 boot-1-<新> 排在 boot-2-<旧> 之前，于是断言检查的是**别的 case 的旧文件**，
+# 报出的 FAIL-c7-evidence-lost-tail(44 字节) 其实是 C5 那次 1 行输出 —— 与"丢尾部"毫无关系。
+# 这正是 rescue_evidence_prune 在生产代码里踩过并已修复的同一类 bug（见其注释）。
+evd=$(ls -1dt "$DSH_HOME"/.rescue/evidence/boot-* 2>/dev/null | head -n1)
 [ -n "$evd" ] || { echo 'FAIL-c7-no-evidence-dir'; show "$T/c7.log"; exit 1; }
 [ -s "$evd/dsh.log" ] || { echo 'FAIL-c7-evidence-empty'; exit 1; }
 grep -q 'FINAL-MARKER' "$evd/dsh.log" \
