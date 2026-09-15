@@ -24,18 +24,18 @@ IMAGE_LOWER=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
 case "$REF_TYPE" in
   tag)
     TAG="$REF_NAME"
-    # 严格形态：v<三段项目版本>-dsh<三段 dsh 版本>[-预发布]，字符集限定为 Docker tag 允许的
-    # [A-Za-z0-9_.-]。只查 "-dsh 后跟数字" 是不够的，以下都能溜过去并造成假锁版 / 怪错：
-    #   v0.3.7-dsh              -> 空版本，npm 静默装 latest
-    #   v0.3.7-dsh0             -> npm 当 0.x 解析
-    #   v0.3.7-dsh-note-dsh0.1.5 -> 切分出 "-note-dsh0.1.5"
-    #   v0.1.0-dsh0.1.2-rc.1+build -> "+" 非法，buildx 报 invalid reference format
-    if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-dsh[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-      echo "ci-image-tags: tag 必须形如 v<X.Y.Z>-dsh<X.Y.Z>[-预发布]（如 v0.3.7-dsh0.1.5-rc.1）；实际收到 '$TAG'" >&2
+    # 严格形态：v<三段项目版本>-dsh-<三段 dsh 版本>[-预发布]，字符集限定为 Docker tag 允许的
+    # [A-Za-z0-9_.-]。注意 `-dsh-` 两侧都有连字符（2026-09 起的约定）。
+    # 只查 "-dsh 后跟数字" 是不够的，以下都能溜过去并造成假锁版 / 怪错：
+    #   v0.3.7-dsh-             -> 空版本，npm 静默装 latest
+    #   v0.3.7-dsh-0            -> npm 当 0.x 解析
+    #   v0.3.7-dsh-0.1.5+build  -> "+" 非法，buildx 报 invalid reference format
+    if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+-dsh-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+      echo "ci-image-tags: tag 必须形如 v<X.Y.Z>-dsh-<X.Y.Z>[-预发布]（如 v0.4.2-dsh-0.1.5-rc.2）；实际收到 '$TAG'" >&2
       exit 1
     fi
-    DSH_VERSION="${TAG#*-dsh}"
-    PROJ_VERSION="${TAG%%-dsh*}"
+    DSH_VERSION="${TAG#*-dsh-}"
+    PROJ_VERSION="${TAG%%-dsh-*}"
     PROJ_VERSION="${PROJ_VERSION#v}"
     [ -n "$DSH_VERSION" ] || { echo "ci-image-tags: empty dsh version in '$TAG'" >&2; exit 1; }
     TAGS="${REGISTRY}/${IMAGE_LOWER}:${TAG},${REGISTRY}/${IMAGE_LOWER}:latest"

@@ -23,21 +23,21 @@ run_case() { # $1=ref_type $2=ref_name
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
 # ---- Tag1 ----
-out=$(run_case tag v0.3.7-dsh0.1.5-rc.1); rc=$?
+out=$(run_case tag v0.3.7-dsh-0.1.5-rc.1); rc=$?
 [ "$rc" = 0 ] || { echo "FAIL-tag1-rc=$rc"; exit 1; }
 [ "$(field "$out" dsh_version)" = "0.1.5-rc.1" ] || { echo "FAIL-tag1-dsh-version: $out"; exit 1; }
 [ "$(field "$out" proj_version)" = "0.3.7" ] || { echo "FAIL-tag1-proj-version: $out"; exit 1; }
 case "$(field "$out" tags)" in
-  *:v0.3.7-dsh0.1.5-rc.1,*:latest) : ;;
+  *:v0.3.7-dsh-0.1.5-rc.1,*:latest) : ;;
   *) echo "FAIL-tag1-tags: $out"; exit 1 ;;
 esac
 
 # ---- Tag2：空 dsh 版本必须拒绝（否则 npm 装 latest = 假锁版镜像）----
-if run_case tag v0.3.7-dsh >/dev/null 2>&1; then echo 'FAIL-tag2-empty-dsh-version-accepted'; exit 1; fi
+if run_case tag v0.3.7-dsh- >/dev/null 2>&1; then echo 'FAIL-tag2-empty-dsh-version-accepted'; exit 1; fi
 # ---- Tag3：非数字 dsh 版本必须拒绝 ----
-if run_case tag v0.3.7-dshx >/dev/null 2>&1; then echo 'FAIL-tag3-nonnumeric-dsh-version-accepted'; exit 1; fi
+if run_case tag v0.3.7-dsh-x >/dev/null 2>&1; then echo 'FAIL-tag3-nonnumeric-dsh-version-accepted'; exit 1; fi
 # ---- Tag4 ----
-out=$(run_case tag v1.0.0-dsh0.2.0) || { echo 'FAIL-tag4-rc'; exit 1; }
+out=$(run_case tag v1.0.0-dsh-0.2.0) || { echo 'FAIL-tag4-rc'; exit 1; }
 [ "$(field "$out" dsh_version)" = "0.2.0" ] || { echo "FAIL-tag4-dsh: $out"; exit 1; }
 [ "$(field "$out" proj_version)" = "1.0.0" ] || { echo "FAIL-tag4-proj: $out"; exit 1; }
 
@@ -50,15 +50,20 @@ out=$(run_case branch main) || { echo 'FAIL-br1-rc'; exit 1; }
 out=$(run_case branch feature/x) || { echo 'FAIL-br2-rc'; exit 1; }
 [ "$(field "$out" tags)" = "ghcr.io/steven-stack-s/dsh-docker:branch-feature-x" ] || { echo "FAIL-br2-tags: $out"; exit 1; }
 
-# ---- Tag5：dsh 版本必须是三段式（"v0.3.7-dsh0" 会被 npm 当 0.x 解析）----
-if run_case tag v0.3.7-dsh0 >/dev/null 2>&1; then echo 'FAIL-tag5-non-semver-dsh-version-accepted'; exit 1; fi
-# ---- Tag6：dsh 版本形态必须紧贴 "-dsh"（旧切分对 v0.3.7-dsh-note-dsh0.1.5 会得到 "-note-dsh0.1.5"）----
-if run_case tag v0.3.7-dsh-note-dsh0.1.5 >/dev/null 2>&1; then echo 'FAIL-tag6-malformed-tag-accepted'; exit 1; fi
+# ---- Tag5：dsh 版本必须是三段式（"v0.3.7-dsh-0" 会被 npm 当 0.x 解析）----
+if run_case tag v0.3.7-dsh-0 >/dev/null 2>&1; then echo 'FAIL-tag5-non-semver-dsh-version-accepted'; exit 1; fi
+# ---- Tag6：项目版本与 dsh 版本之间必须恰好一个 "-dsh-" 分隔 ----
+if run_case tag v0.3.7-dsh-note-dsh-0.1.5 >/dev/null 2>&1; then echo 'FAIL-tag6-malformed-tag-accepted'; exit 1; fi
 # ---- Tag7：Docker tag 不允许 "+"（build metadata），必须在发布前拒绝而不是让 buildx 报怪错 ----
-if run_case tag v0.1.0-dsh0.1.2-rc.1+build >/dev/null 2>&1; then echo 'FAIL-tag7-build-metadata-accepted'; exit 1; fi
+if run_case tag v0.1.0-dsh-0.1.2-rc.1+build >/dev/null 2>&1; then echo 'FAIL-tag7-build-metadata-accepted'; exit 1; fi
 # ---- Tag8：无预发布后缀的 dsh 版本必须接受 ----
-out=$(run_case tag v0.3.7-dsh0.1.5) || { echo 'FAIL-tag8-rc'; exit 1; }
+out=$(run_case tag v0.3.7-dsh-0.1.5) || { echo 'FAIL-tag8-rc'; exit 1; }
 [ "$(field "$out" dsh_version)" = "0.1.5" ] || { echo "FAIL-tag8-dsh: $out"; exit 1; }
+# ---- Tag9：**旧格式必须被拒绝** ----
+# 2026-09 起约定改为 v<X.Y.Z>-dsh-<X.Y.Z>（"-dsh-" 两侧都有连字符）。旧格式不再接受，
+# 否则同一仓库会同时存在两种形态、issue/文档/release 抽取逻辑要长期维护两套分支。
+if run_case tag v0.4.2-dsh0.1.5-rc.2 >/dev/null 2>&1; then echo 'FAIL-tag9-legacy-format-still-accepted'; exit 1; fi
+
 # ---- Br3：分支名里的非法字符必须清洗成合法 Docker tag 字符 ----
 out=$(run_case branch 'weird+branch') || { echo 'FAIL-br3-rc'; exit 1; }
 [ "$(field "$out" tags)" = "ghcr.io/steven-stack-s/dsh-docker:branch-weird-branch" ] || { echo "FAIL-br3-tags: $out"; exit 1; }

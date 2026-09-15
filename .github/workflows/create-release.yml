@@ -7,7 +7,7 @@
 #
 # 用法（Actions → create-release → Run workflow）：
 #   - tag 留空  → 自动补齐所有**尚无 Release** 的 tag（历史版本一次性补齐）
-#   - tag 填值  → 只处理该 tag（如 v0.4.0-dsh0.1.5-rc.1），幂等：已存在则更新正文
+#   - tag 填值  → 只处理该 tag（如 v0.4.0-dsh-0.1.5-rc.1），幂等：已存在则更新正文
 #
 # release notes 取自 CHANGELOG 中对应 tag 的段落；抽不到时退回一句指向 CHANGELOG 的说明。
 # ============================================================================

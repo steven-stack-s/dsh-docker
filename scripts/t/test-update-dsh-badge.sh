@@ -13,7 +13,7 @@
 #   B6 锚点缺失            -> 退出 1，绝不静默通过
 #   B7 版本形态非法        -> 退出 1
 #   B8 --dry-run           -> 报告但不写文件
-#   B9 不误伤其他行        -> Release 徽章行里的 v0.4.0-dsh0.1.5-rc.1 必须原样保留
+#   B9 不误伤其他行        -> Release 徽章行里的 v0.4.0-dsh-0.1.5-rc.1 必须原样保留
 #
 # 用法: sh scripts/t/test-update-dsh-badge.sh    （全通过打印 ALL-PASS）
 # ============================================================================
@@ -99,7 +99,7 @@ out=$(sh "$SCRIPT" 0.3.0 --dry-run "$F" 2>&1); rc=$?
 case "$out" in *"would-update"*) : ;; *) echo "FAIL-b8-msg: $out"; exit 1 ;; esac
 [ "$before" = "$(checksum "$F")" ] || { echo "FAIL-b8-mutated"; exit 1; }
 
-# ---- B9 不误伤 Release 徽章行里的 v0.4.0-dsh0.1.5-rc.1 ----
+# ---- B9 不误伤 Release 徽章行里的 v0.4.0-dsh-0.1.5-rc.1 ----
 sh "$SCRIPT" 0.9.9 "$F" >/dev/null 2>&1 || { echo "FAIL-b9-rc"; exit 1; }
 grep -q 'github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8' "$F" \
   || { echo "FAIL-b9-release-line-damaged"; exit 1; }
