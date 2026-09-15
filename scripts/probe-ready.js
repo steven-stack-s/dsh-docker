@@ -40,6 +40,10 @@ const FAIL_BODY_PATTERNS = [
   /Failed to load plugins/i,
   /did not activate/i,
   /dsh-boot-(error|failed)/i,
+  // DSH 0.1.6 起把启动失败分成两类：必需条目（agent-loop/webserver/modules/connection/...）
+  // 失败 -> "required startup failure"；可选条目失败只 warn。两类都必须判不健康，
+  // 否则"必需插件挂了但 HTTP 仍返回 200"会被漏判成健康。
+  /required startup failure/i,
 ];
 const failCheckEnabled = () => (process.env.RESCUE_PROBE_FAIL_CHECK || 'on') !== 'off';
 
