@@ -35,6 +35,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 必须显式 fetch-tags：actions/checkout 在 workflow_dispatch（基于分支）触发时
+          # 只 fetch 被检出的 ref，fetch-depth:0 保证的是"全历史"而**不是"全 tag"**。
+          # 实测：只 fetch main 时本地 tag 数为 0，于是 candidates="$(git tag -l)" 为空、
+          # 循环空转 —— 表现为"工作流绿灯、release 却一个都没建"，极难察觉。
+          fetch-tags: true
 
       - name: Create or update release(s)
         env:
@@ -45,6 +50,13 @@ jobs:
             candidates="$TARGET_TAG"
           else
             candidates="$(git tag -l --sort=v:refname)"
+          fi
+          # 空候选必须【报错】而不是静默成功：本工作流曾因 checkout 没拉 tag 导致
+          # candidates 为空、循环空转、工作流绿灯却什么都没建（10 秒跑完）。
+          # 补了 fetch-tags: true 之后这里再加一道断言，防止同类问题再次静默溜过。
+          if [ -z "$(printf "%s" "$candidates" | tr -d "[:space:]")" ]; then
+            echo "::error::候选 tag 为空 —— 多半是 checkout 没拉到 tag（见 fetch-tags）。拒绝静默成功。"
+            exit 1
           fi
           created=0; updated=0
           for t in $candidates; do
