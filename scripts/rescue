@@ -19,7 +19,7 @@ else
   . "$HERE/librescue.sh"                  # image flat layout /opt/dsh-rescue
 fi
 cmd="${1:-}"
-[ -n "$cmd" ] || { echo 'usage: rescue <snapshot|snapshots|plugin|rollback|dsh-upgrade|dsh-reinstall|status|doctor|lifeboat|report|incident|verify|selfheal|export>'; exit 2; }
+[ -n "$cmd" ] || { echo 'usage: rescue <snapshot|snapshots|plugin|rollback|dsh-upgrade|dsh-reinstall|status|doctor|lifeboat|report|incident|verify|selfheal|export|clean>'; exit 2; }
 shift
 
 case "$cmd" in
@@ -137,6 +137,42 @@ case "$cmd" in
         ;;
       *) echo 'usage: rescue selfheal <status|reset>'; exit 2 ;;
     esac
+    ;;
+  clean)
+    # 升级后环境清理（规格 docs/superpowers/specs/2026-09-15-rescue-clean-design.md）
+    # 默认 dry-run：不带 --yes 时全程只读，不拍快照、不改动任何文件。
+    dry=1
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --yes|-y) dry=0; shift ;;
+        --dry-run|-n) dry=1; shift ;;
+        *) echo "clean: unknown option '$1'  (usage: rescue clean [--dry-run|-n] [--yes])"; exit 2 ;;
+      esac
+    done
+    if [ "$dry" = 1 ]; then
+      echo 'clean: dry-run (no changes will be made; pass --yes to apply)'
+      rescue_clean_npm_cache 1 || true
+      rescue_clean_pnpm_store 1 || true
+      pdir=$(profile_dir)
+      rescue_clean_pnpm_orphans "$pdir" 1 || true
+      echo 'clean: rescue history rotation skipped in dry-run'
+      echo 'clean: dry-run complete — nothing was changed'
+      exit 0
+    fi
+    # ---- 真实清理：先拍快照作为护栏（仅 profile 就绪时）----
+    pdir=$(profile_dir)
+    if [ -d "$pdir" ] && [ -f "$pdir/package.json" ]; then
+      REASON_SNAPSHOT='pre-clean' rescue_snapshot >/dev/null 2>&1 \
+        && echo 'clean: pre-clean snapshot created' \
+        || echo 'clean: WARN pre-clean snapshot failed; continuing'
+    else
+      echo "clean: no profile at $pdir — skipping snapshot"
+    fi
+    rescue_clean_npm_cache 0 || true
+    rescue_clean_pnpm_store 0 || true
+    rescue_clean_pnpm_orphans "$pdir" 0 || true
+    rescue_clean_rescue_history || true
+    echo 'clean: done'
     ;;
   verify)
     # 快照完整性（P0-6）：hardlink 模式的快照与 live 共享 inode，可能已被就地改写污染。

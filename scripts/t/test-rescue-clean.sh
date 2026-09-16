@@ -258,4 +258,69 @@ printf 'lockfileVersion: 9.0\n' > "$PG3/pnpm-lock.yaml"
 rescue_clean_pnpm_orphans "$PG3" 0 >/dev/null 2>&1 || true
 [ -d "$PG3/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-truncated-lockfile-wiped-tree'
 
+# --- 9) CLI：默认 dry-run 不产生副作用、不拍快照 ---
+RESCUE="$ROOT/scripts/rescue"
+[ -x "$RESCUE" ] || fail 'rescue-not-executable'
+rm -rf "$RESCUE_DIR"/snap-*
+before_n=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | wc -l | tr -d ' ')
+sh "$RESCUE" clean >/dev/null 2>&1 || fail 'clean-dryrun-exit-nonzero'
+after_n=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | wc -l | tr -d ' ')
+[ "$before_n" = "$after_n" ] || fail 'dryrun-created-snapshot'
+[ -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" ] || fail 'dryrun-removed-live-entry'
+
+# --- 10) CLI：usage 串包含 clean ---
+sh "$RESCUE" >/dev/null 2>&1 || true
+usage=$(sh "$RESCUE" 2>&1 || true)
+printf '%s' "$usage" | grep -q 'clean' || fail 'usage-missing-clean'
+
+# --- 11) CLI：--yes 拍 pre-clean 快照 ---
+# 重建一份孤儿，确保有东西可清
+mkdir -p "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz"
+printf 'junk' > "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz/index.js"
+: > "$PNPM_STUB_LOG"
+sh "$RESCUE" clean --yes >/dev/null 2>&1 || fail 'clean-yes-exit-nonzero'
+ls -1d "$RESCUE_DIR"/snap-* >/dev/null 2>&1 || fail 'clean-yes-created-no-snapshot'
+grep -q '"reason":"pre-clean"' "$RESCUE_DIR"/snap-*/meta.json || fail 'pre-clean-reason-missing'
+[ ! -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz" ] || fail 'clean-yes-did-not-remove-orphan'
+
+# --- 12) CLI：未知选项须报错退出（非 0）---
+if sh "$RESCUE" clean --bogus >/dev/null 2>&1; then fail 'unknown-option-should-fail'; fi
+
+# --- 13) 红线：--yes 后 package.json 与 lockfile 仍字节级不变 ---
+[ "$before_pkg" = "$(cksum < "$P/package.json")" ] || fail 'REDLINE-yes-package.json-modified'
+[ "$before_lock" = "$(cksum < "$P/pnpm-lock.yaml")" ] || fail 'REDLINE-yes-lockfile-modified'
+
+# --- 14) 与自愈预算解耦 ---
+[ ! -f "$RESCUE_DIR/state/selfheal.json" ] || fail 'clean-touched-selfheal-budget'
+
+# --- 15) 要求 A：rescue history 轮转失败不得中断整个 clean（部分失败须如实反映）---
+# 构造真实故障：把 scripts/ 整棵复制到沙箱，并在副本里删掉 rescue_evidence_prune /
+# rescue_incident_prune 的定义（等价于任务 3 修掉的「函数在 librescue 里不可见」回归）。
+# 此时 rescue_clean_rescue_history 的真实契约是打印 "prune incomplete" 并返回非 0。
+# 断言：① 该函数的确失败了（否则本用例空洞通过）② clean 仍以 0 退出且走到 'clean: done'。
+A="$T/attach-fail"
+mkdir -p "$A"
+cp -a "$ROOT/scripts" "$A/scripts"
+sed -i 's/^rescue_evidence_prune() {/rescue_evidence_prune_disabled_for_test() {/' "$A/scripts/librescue.sh" 2>/dev/null || \
+  sed -i '' 's/^rescue_evidence_prune() {/rescue_evidence_prune_disabled_for_test() {/' "$A/scripts/librescue.sh"
+sed -i 's/^rescue_incident_prune() {/rescue_incident_prune_disabled_for_test() {/' "$A/scripts/librescue.sh" 2>/dev/null || \
+  sed -i '' 's/^rescue_incident_prune() {/rescue_incident_prune_disabled_for_test() {/' "$A/scripts/librescue.sh"
+# 前置断言：故障注入必须真的生效（否则下面的断言毫无意义）
+if grep -q '^rescue_evidence_prune() {' "$A/scripts/librescue.sh"; then fail 'requirementA-injection-ineffective'; fi
+# 前置断言：控制组 —— 在该副本中直接调用该函数必须返回非 0
+if ( DSH_HOME="$T/attach-home" sh -c ". '$A/scripts/librescue.sh'; rescue_clean_rescue_history" ) >/dev/null 2>&1; then
+  fail 'requirementA-control-function-did-not-fail'
+fi
+# 主断言：即便 history 轮转失败，clean --yes 也必须正常结束（退出 0 且不中断）
+mkdir -p "$T/attach-home/profiles/web"
+printf '%s' '{"name":"web"}' > "$T/attach-home/profiles/web/package.json"
+set +e
+out15=$(DSH_HOME="$T/attach-home" sh "$A/scripts/rescue" clean --yes 2>&1)
+rc15=$?
+set -e
+[ "$rc15" = 0 ] || fail "requirementA-clean-aborted-on-history-failure:rc=$rc15"
+printf '%s' "$out15" | grep -q 'clean: done' || fail 'requirementA-clean-did-not-complete'
+# 部分失败必须如实反映，不得静默吞掉
+printf '%s' "$out15" | grep -q 'prune incomplete' || fail 'requirementA-partial-failure-not-reported'
+
 echo 'ALL-PASS'
