@@ -323,4 +323,206 @@ printf '%s' "$out15" | grep -q 'clean: done' || fail 'requirementA-clean-did-not
 # 部分失败必须如实反映，不得静默吞掉
 printf '%s' "$out15" | grep -q 'prune incomplete' || fail 'requirementA-partial-failure-not-reported'
 
+# --- 15) 回滚交互红线：清理孤儿后仍能回滚到清理前的快照 ---
+# 这是本设计的核心安全性质：clean 只删「当前 lockfile 未引用」的条目，而快照
+# （hardlink 模式下 cp -al 对目录是新建目录 + 硬链接文件）里另有一份独立的目录项，
+# 故回滚会连同 lockfile 一起还原，6.3.1 的条目重新可用。若后续改动破坏该性质，
+# 用户就失去了「升级出问题 -> clean -> 回滚」这条自救路径。
+R2="$T/home2"; export DSH_HOME="$R2"
+mkdir -p "$R2/profiles/web"
+printf '%s' '{"name":"web","dependencies":{"@wenaixi/dsh-superpower":"6.3.1"}}' > "$R2/profiles/web/package.json"
+cat > "$R2/profiles/web/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  '@wenaixi/dsh-superpower@6.3.1':
+    resolution: {integrity: sha512-yyy}
+
+snapshots:
+EOF
+mkdir -p "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa"
+printf '6.3.1' > "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa/index.js"
+
+# 重新 source 以套用新 DSH_HOME（RESCUE_DIR / LOG_FILE 都按 DSH_HOME 派生）
+. "$LIB"
+RESCUE_KEEP=5 REASON_SNAPSHOT='pre-upgrade' rescue_snapshot >/dev/null 2>&1 || fail 'rollback-fixture-snapshot-failed'
+
+# 升级：lockfile 指向新版本，旧版本变孤儿
+sed -i 's/@wenaixi\/dsh-superpower@6.3.1/@wenaixi\/dsh-superpower@6.3.9/' "$R2/profiles/web/pnpm-lock.yaml"
+printf '%s' '{"name":"web","dependencies":{"@wenaixi/dsh-superpower":"6.3.9"}}' > "$R2/profiles/web/package.json"
+mkdir -p "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_bb"
+printf '6.3.9' > "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_bb/index.js"
+
+# 前置断言（防空洞）：升级后 lockfile 必须真的不再引用 6.3.1，否则下面的
+# 「孤儿已被删除」断言会因为「它其实是被引用的、照理不该删」而失去意义。
+grep -q '@wenaixi/dsh-superpower@6.3.9' "$R2/profiles/web/pnpm-lock.yaml" || fail 'setup-upgrade-lockfile-not-rewritten'
+if grep -q '@wenaixi/dsh-superpower@6\.3\.1' "$R2/profiles/web/pnpm-lock.yaml"; then fail 'setup-old-version-still-locked'; fi
+
+# 清理孤儿（6.3.1 已不被新 lockfile 引用）
+command -v rescue_clean_pnpm_orphans >/dev/null 2>&1 || fail 'function-missing:rescue_clean_pnpm_orphans'
+rescue_clean_pnpm_orphans "$R2/profiles/web" 0 >/dev/null 2>&1 || true
+[ ! -d "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || fail 'setup-orphan-not-removed'
+
+# 回滚到 pre-upgrade 快照
+snap=$(rescue_snapshot_list_by_time | head -n1)
+[ -n "$snap" ] || fail 'no-snapshot-to-restore'
+rescue_restore "${snap##*/}" >/dev/null 2>&1 || fail 'restore-failed-after-clean'
+
+# 断言：回滚后 lockfile 与依赖树一致，且 6.3.1 条目重新可用
+# 用整键匹配（锁文件里键写作 '@pkg@ver':）而不是纯子串，避免 6.3.19/6.3.1x 也被算作命中。
+grep -qF "'@wenaixi/dsh-superpower@6.3.1':" "$R2/profiles/web/pnpm-lock.yaml" \
+  || fail 'rollback-lockfile-not-restored'
+[ -d "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] \
+  || fail 'REGRESSION-rollback-target-missing-after-clean'
+
+# 恢复默认 DSH_HOME，避免后续用例依赖「上一个用例留下的状态」
+export DSH_HOME="$T/home"
+. "$LIB"
+
+# --- 16) dry-run 全盘零副作用：整棵目录树指纹比对（补充要求 1）---
+# 既有 dry-run 用例（第 7、9 节）只抽查「某个已知目录还在不在」，无法捕捉
+# 「dry-run 删除了**未抽查的其它文件**」这类回归。这里改为对整棵沙箱树做指纹比对：
+# 铺好真实形态的残留（npm _cacache、profile .pnpm 孤儿、evidence/incident 目录），
+# 跑 dry-run 前后要求指纹完全一致。
+#
+# 注意 rescue.log 必须排除在比对之外：dry-run 会写审计日志（记录「跳过了什么」是预期行为），
+# 其大小/mtime 必然变化；把它算进指纹会让用例变成永远失败。日志以外的任何差异都算副作用。
+dry_fp() {
+  # $1 = 根目录。%y 类型 / %m 权限 / %s 大小 / %p 相对路径。
+  # 不含 mtime（日志/目录 mtime 会被审计写入扰动），不含 %i（inode 跨运行不稳定）。
+  ( cd "$1" && find . -printf '%y %m %s %p\n' 2>/dev/null | LC_ALL=C sort )
+}
+
+D="$T/dryrun-full"
+mkdir -p "$D/home/profiles/web/node_modules/.pnpm" \
+         "$D/home/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" \
+         "$D/home/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" \
+         "$D/home/.rescue/evidence/boot-1-20260901000000" \
+         "$D/home/.rescue/incidents" \
+         "$D/npmcache/_cacache/content-v2" \
+         "$D/npmcache/_logs"
+printf '%s' '{"name":"web","dependencies":{"@wenaixi/dsh-superpower":"6.3.0-dsh.10"}}' > "$D/home/profiles/web/package.json"
+cat > "$D/home/profiles/web/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  '@wenaixi/dsh-superpower@6.3.0-dsh.10':
+    resolution: {integrity: sha512-yyy}
+
+snapshots:
+EOF
+printf 'old' > "$D/home/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa/index.js"
+printf 'live' > "$D/home/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb/index.js"
+# 一个「不该被动到」的旁观目录：它既不是孤儿也没有被任何既有用例抽查。
+# 没有它，本节只能证明「已知的几个残留没被删」；有了它，才能真正证明「dry-run 没删任何东西」。
+mkdir -p "$D/home/profiles/web/node_modules/.pnpm/bystander-pkg@1.0.0_aa"
+printf 'bystander' > "$D/home/profiles/web/node_modules/.pnpm/bystander-pkg@1.0.0_aa/index.js"
+printf 'cache-blob' > "$D/npmcache/_cacache/content-v2/blob"
+printf 'keepme' > "$D/npmcache/_logs/keep.log"
+printf '%s' '{"id":"inc-1"}' > "$D/home/.rescue/incidents/inc-1.json"
+printf 'ev' > "$D/home/.rescue/evidence/boot-1-20260901000000/dsh.log"
+# 快照护栏：dry-run 连快照都不该拍，先造一份作为基线
+DSH_HOME="$D/home" RESCUE_PROFILE=web sh -c ". '$LIB'; RESCUE_KEEP=5 rescue_snapshot" >/dev/null 2>&1 \
+  || fail 'dryrun-full:fixture-snapshot-failed'
+
+# 控制组：残留必须真的在场，否则「没被删」断言空洞通过（没有任何东西可删时自然一致）
+[ -f "$D/npmcache/_cacache/content-v2/blob" ] || fail 'dryrun-full:fixture-npm-cache-missing'
+[ -d "$D/home/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || fail 'dryrun-full:fixture-orphan-missing'
+[ -d "$D/home/.rescue/evidence/boot-1-20260901000000" ] || fail 'dryrun-full:fixture-evidence-missing'
+[ -f "$D/home/.rescue/incidents/inc-1.json" ] || fail 'dryrun-full:fixture-incident-missing'
+
+# 用真实 CLI 走真实路径（NPM_CONFIG_CACHE 指向沙箱缓存树）
+dry_fp "$D" > "$D/fp.before"
+[ -s "$D/fp.before" ] || fail 'dryrun-full:empty-fingerprint'
+set +e
+outdry=$(DSH_HOME="$D/home" RESCUE_PROFILE=web NPM_CONFIG_CACHE="$D/npmcache" sh "$RESCUE" clean -n 2>&1)
+rc_dry=$?
+set -e
+[ "$rc_dry" = 0 ] || fail "dryrun-full:exit-nonzero:rc=$rc_dry"
+dry_fp "$D" > "$D/fp.after"
+# 指纹文件自身是上面两条重定向建出来的，必须排除在比对之外，否则必然 diff。
+grep -v ' \./fp\.\(before\|after\)$' "$D/fp.before" > "$D/fp.before.clean"
+grep -v ' \./fp\.\(before\|after\)$' "$D/fp.after" > "$D/fp.after.clean"
+
+# 主断言：除审计日志外的整棵树指纹必须逐字节一致
+if ! diff -u "$D/fp.before.clean" "$D/fp.after.clean" > "$D/fp.diff" 2>&1; then
+  echo '--- dry-run full-tree fingerprint diff (before vs after) ---'
+  cat "$D/fp.diff"
+  fail 'dryrun-full:filesystem-side-effect'
+fi
+
+# 日志本身必须存在（证明 dry-run 真的走到了 clean 路径，而不是整条命令没执行），
+# 同时它只能增长，不得被清空/截断
+[ -s "$D/home/.rescue/log/rescue.log" ] || fail 'dryrun-full:audit-log-missing'
+grep -q 'removed' "$D/home/.rescue/log/rescue.log" \
+  && fail 'dryrun-full:dryrun-logged-removal'
+
+# --- 17) 审计日志假成功回归：rm 失败时不得打印/记录 removed（补充要求 2）---
+# 任务 3 修掉了「rm -rf 失败仍打印/记录 removed」的假成功问题，但当时无任何测试覆盖。
+# 这里用 PATH shim 注入一个恒失败的 rm 真正触发失败分支。
+# 为什么不能靠 chmod：本环境/镜像内是 root，root 无视目录权限位，rm -rf 照样成功。
+R3="$T/home3"; export DSH_HOME="$R3"
+mkdir -p "$R3/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa"
+printf '6.3.1' > "$R3/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa/index.js"
+printf '%s' '{"name":"web"}' > "$R3/profiles/web/package.json"
+cat > "$R3/profiles/web/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  '@wenaixi/dsh-superpower@6.3.9':
+    resolution: {integrity: sha512-yyy}
+
+snapshots:
+EOF
+. "$LIB"
+ORPHAN3='@wenaixi+dsh-superpower@6.3.1_peer_aa'
+
+SHIM3="$T/bin-rmfail"; mkdir -p "$SHIM3"
+cat > "$SHIM3/rm" <<'RMFAIL'
+#!/bin/sh
+# 恒失败的 rm：证明「删除失败」路径；但必须精确复现 rm -rf 的语义 ——
+# 失败时不得删除，成功路径一律不在此分支。
+printf 'rm-shim invoked: %s\n' "$*" >> "${RM_SHIM_LOG:-/dev/null}"
+exit 1
+RMFAIL
+chmod +x "$SHIM3/rm"
+export RM_SHIM_LOG="$T/rm-shim.log"
+: > "$RM_SHIM_LOG"
+SAVED_PATH3="$PATH"
+export PATH="$SHIM3:$PATH"
+
+# 控制组（关键）：先证明在这个 PATH 下 rm 确实失败了。
+# 若 shim 未生效，后面的删除会成功、日志里自然没有 failed 记录，用例会「空洞通过」。
+if rm -rf "$R3/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" 2>/dev/null; then
+  export PATH="$SAVED_PATH3"
+  fail 'logfailsuccess:control-rm-shim-ineffective'
+fi
+[ -s "$RM_SHIM_LOG" ] || { export PATH="$SAVED_PATH3"; fail 'logfailsuccess:control-rm-shim-not-invoked'; }
+[ -d "$R3/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || \
+  { export PATH="$SAVED_PATH3"; fail 'logfailsuccess:control-orphan-removed-despite-failure'; }
+
+# 被测函数：真实清理路径下删除必然失败
+rescue_clean_pnpm_orphans "$R3/profiles/web" 0 >/dev/null 2>&1 || true
+# 还原 PATH 后再读日志/做断言，避免后续任何 sh 调用受影响
+export PATH="$SAVED_PATH3"
+
+LOG3="$R3/.rescue/log/rescue.log"
+[ -f "$LOG3" ] || fail 'logfailsuccess:audit-log-missing'
+
+# 主断言 ①：审计日志必须如实记录失败
+grep -q "clean: failed to remove orphan $ORPHAN3" "$LOG3" || fail 'logfailsuccess:no-failure-record'
+# 主断言 ②：审计日志绝不得出现该条目的假成功记录
+if grep -q "clean: removed pnpm orphan $ORPHAN3" "$LOG3"; then
+  echo '--- audit log ---'; cat "$LOG3"
+  fail 'logfailsuccess:false-success-recorded'
+fi
+# 主断言 ③：条目确实没被删（失败的事实与日志一致）
+[ -d "$R3/profiles/web/node_modules/.pnpm/$ORPHAN3" ] || fail 'logfailsuccess:entry-vanished-despite-rm-failure'
+
+export DSH_HOME="$T/home"
+. "$LIB"
+
 echo 'ALL-PASS'
