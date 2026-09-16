@@ -165,4 +165,43 @@ if [ -s "$PNPM_STUB_LOG" ]; then fail 'dryrun-invoked-pnpm-store'; fi
 rescue_clean_pnpm_store 0 >/dev/null 2>&1 || true
 grep -q 'store prune' "$PNPM_STUB_LOG" || fail 'real-run-did-not-prune-store'
 
+# --- 7) profile 孤儿清理：被引用者绝不删 ---
+P="$DSH_HOME/profiles/web"
+mkdir -p "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" \
+         "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" \
+         "$P/node_modules/.pnpm"
+printf 'old' > "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa/index.js"
+printf 'new' > "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb/index.js"
+cat > "$P/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  '@wenaixi/dsh-superpower@6.3.0-dsh.10':
+    resolution: {integrity: sha512-yyy}
+
+snapshots:
+EOF
+# 红线基线：记录两个受保护文件的字节指纹
+before_pkg=$(cksum < "$P/package.json")
+before_lock=$(cksum < "$P/pnpm-lock.yaml")
+
+# dry-run：不删任何东西
+rescue_clean_pnpm_orphans "$P" 1 >/dev/null 2>&1 || true
+[ -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || fail 'dryrun-deleted-orphan'
+
+# 真实清理：孤儿消失、在用者保留
+rescue_clean_pnpm_orphans "$P" 0 >/dev/null 2>&1 || true
+[ ! -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || fail 'real-run-kept-orphan'
+[ -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" ] || fail 'REGRESSION-deleted-referenced-entry'
+
+# 红线：两个受保护文件字节级不变
+[ "$before_pkg" = "$(cksum < "$P/package.json")" ] || fail 'REDLINE-package.json-modified'
+[ "$before_lock" = "$(cksum < "$P/pnpm-lock.yaml")" ] || fail 'REDLINE-lockfile-modified'
+
+# --- 8) 救援历史轮转函数在 librescue 上下文可用（可见性回归）---
+command -v rescue_evidence_prune >/dev/null 2>&1 || fail 'evidence-prune-not-visible-in-librescue'
+command -v rescue_incident_prune >/dev/null 2>&1 || fail 'incident-prune-not-visible-in-librescue'
+rescue_clean_rescue_history >/dev/null 2>&1 || fail 'rescue-history-clean-failed'
+
 echo 'ALL-PASS'

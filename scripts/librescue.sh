@@ -703,3 +703,80 @@ rescue_clean_pnpm_store() {
   rescue_log "clean: pnpm store prune -> $_ps_out"
   printf 'pnpm store: %s\n' "$_ps_out"
 }
+
+# == 从 scripts/rescue-supervise.sh 下沉至此的救援历史轮转实现 ==
+# 原因：scripts/rescue（CLI）只 source librescue.sh，定义在 supervise 侧会让
+# `rescue clean` 拿不到它（command not found）。两份实现会漂移，故只保留这一份。
+# evidence 修剪：dsh 日志经 tee 持续镜像到证据目录，按 boot-* 保留最近 RESCUE_KEEP 份，
+# 防长期运行的 dsh.log 镜像无限累积（healthy 后 tee 不再被提前杀死）。
+#
+# 必须按【创建时间】而不是目录名排序：目录名是 boot-<attempt>-<ts>，而 attempt 每次容器重启
+# 都从 1 重新计数，字典序会把重启后第一轮的 boot-1-<新> 排到旧一轮的 boot-2-<旧> 之前当成
+# "最老"删掉 —— 新目录刚建出来就被自己删掉，紧接着 mkfifo 失败、EVLOG 为空，diagnose 拿不到
+# 证据只能 report-only（自愈静默降级，且日志上完全看不出原因）。
+# $1（可选）= 当前这一轮正在使用的目录，永不删除。
+rescue_evidence_prune() {
+  keep="${1:-}"
+  # 证据保留份数可独立配置（P1-9）：此前与快照保留数共用 RESCUE_KEEP，调大快照数会意外多留证据。
+  # 默认沿用 RESCUE_KEEP，保持既有行为。
+  _evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
+  while :; do
+    n=$(ls -1d "$(evidence_dir)"/boot-* 2>/dev/null | wc -l | tr -d ' ')
+    [ "$n" -gt "$_evidence_keep" ] || break
+    oldest=$(ls -1dt "$(evidence_dir)"/boot-* 2>/dev/null | tail -n1)
+    [ -n "$oldest" ] || break
+    if [ -n "$keep" ] && [ "$oldest" = "$keep" ]; then break; fi
+    # 删除失败必须立刻停止：本函数在 PID1 的启动路径上，若循环重试同一个删不掉的目录，
+    # 容器会永远起不来、单核跑满且没有任何日志（评审实测）。
+    rm -rf "$oldest" 2>/dev/null || { rescue_log "evidence prune: rm failed ($oldest), stop pruning"; break; }
+  done
+}
+
+# C3：profile 的 .pnpm 中未被 lockfile 引用的条目。
+# 安全性：只删「当前 lockfile 未引用」的条目。回滚会连同 lockfile 一起还原，
+# 且被删条目在快照里另有独立目录项（cp -al 对目录是新建目录 + 硬链接文件），
+# 故清理不破坏 rescue rollback 基线（规格 §6 已实测）。
+rescue_clean_pnpm_orphans() {
+  _co_pdir="$1"; _co_dry="${2:-1}"
+  _co_pnpm="$_co_pdir/node_modules/.pnpm"
+  _co_lock="$_co_pdir/pnpm-lock.yaml"
+  if [ ! -d "$_co_pnpm" ]; then
+    printf 'pnpm orphans: no virtual store at %s (skipped)\n' "$_co_pnpm"
+    return 0
+  fi
+  if [ ! -f "$_co_lock" ]; then
+    # 无 lockfile 时无法证明谁是可删的 —— 保守起见一律不动（红线）
+    rescue_log "clean: no lockfile at $_co_lock; orphan cleanup skipped"
+    printf 'pnpm orphans: lockfile missing (%s) - skipped for safety\n' "$_co_lock"
+    return 0
+  fi
+  _co_n=0; _co_sz=0
+  for _co_d in "$_co_pnpm"/*; do
+    [ -d "$_co_d" ] || continue
+    _co_name=${_co_d##*/}
+    rescue_pnpm_is_orphan "$_co_name" "$_co_lock" || continue
+    _co_b=$(rescue_dir_size_bytes "$_co_d")
+    _co_n=$((_co_n + 1))
+    _co_sz=$((_co_sz + _co_b))
+    if [ "$_co_dry" = 1 ]; then
+      printf 'pnpm orphan: %s (%s B)\n' "$_co_name" "$_co_b"
+    else
+      rm -rf "$_co_d" 2>/dev/null || rescue_log "clean: failed to remove orphan $_co_name"
+      rescue_log "clean: removed pnpm orphan $_co_name ($_co_b B)"
+      printf 'pnpm orphan: %s removed (%s B)\n' "$_co_name" "$_co_b"
+    fi
+  done
+  if [ "$_co_n" = 0 ]; then
+    printf 'pnpm orphans: none (%s)\n' "$_co_pnpm"
+  else
+    printf 'pnpm orphans: %s entr%s, %s B\n' "$_co_n" "$([ "$_co_n" = 1 ] && printf y || printf ies)" "$_co_sz"
+  fi
+}
+
+# C4：显式触发既有轮转（不新写轮转逻辑）
+rescue_clean_rescue_history() {
+  rescue_evidence_prune 2>/dev/null || true
+  rescue_incident_prune 2>/dev/null || true
+  rescue_log 'clean: rescue history pruned (evidence + incidents)'
+  printf 'rescue history: evidence + incidents pruned\n'
+}
