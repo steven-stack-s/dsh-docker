@@ -653,3 +653,53 @@ rescue_pnpm_is_orphan() {
   fi
   return 0
 }
+
+# 目录占用字节数（du -sk 的 POSIX 口径）；不存在或不可读时打印 0。
+rescue_dir_size_bytes() {
+  _ds_p="$1"
+  [ -e "$_ds_p" ] || { printf '0'; return 0; }
+  _ds_k=$(du -sk "$_ds_p" 2>/dev/null | awk '{print $1}' | head -n1)
+  case "$_ds_k" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$((_ds_k * 1024))" ;; esac
+}
+
+# C1：npm 下载缓存。只删 _cacache（纯下载缓存），保留 _logs 等同级内容。
+# 定位顺序：NPM_CONFIG_CACHE / npm_config_cache -> npm config get cache -> /root/.npm
+rescue_clean_npm_cache() {
+  _nc_dry="${1:-1}"
+  _nc_cache="${NPM_CONFIG_CACHE:-${npm_config_cache:-}}"
+  if [ -z "$_nc_cache" ]; then
+    _nc_cache=$(npm config get cache 2>/dev/null || printf '')
+  fi
+  [ -n "$_nc_cache" ] || _nc_cache=/root/.npm
+  _nc_target="$_nc_cache/_cacache"
+  if [ ! -d "$_nc_target" ]; then
+    rescue_log "clean: npm cache absent ($_nc_target)"
+    printf 'npm cache: %s (absent, 0 B)\n' "$_nc_cache"
+    return 0
+  fi
+  _nc_sz=$(rescue_dir_size_bytes "$_nc_target")
+  if [ "$_nc_dry" = 1 ]; then
+    printf 'npm cache: %s (%s B reclaimable)\n' "$_nc_cache" "$_nc_sz"
+    return 0
+  fi
+  rm -rf "$_nc_target" 2>/dev/null || { rescue_log "clean: npm cache removal failed ($_nc_target)"; return 1; }
+  rescue_log "clean: removed npm cache $_nc_target (%s B)" "$_nc_sz"
+  printf 'npm cache: %s (%s B reclaimed)\n' "$_nc_cache" "$_nc_sz"
+}
+
+# C2：pnpm 内容寻址存储。官方语义即「只删 unreferenced」，故直接委托 pnpm store prune。
+rescue_clean_pnpm_store() {
+  _ps_dry="${1:-1}"
+  if ! command -v pnpm >/dev/null 2>&1; then
+    rescue_log 'clean: pnpm not found; store prune skipped'
+    printf 'pnpm store: pnpm not found (skipped)\n'
+    return 0
+  fi
+  if [ "$_ps_dry" = 1 ]; then
+    printf 'pnpm store: would run "pnpm store prune" (removes unreferenced packages only)\n'
+    return 0
+  fi
+  _ps_out=$(pnpm store prune 2>&1) || { rescue_log "clean: pnpm store prune failed: $_ps_out"; return 1; }
+  rescue_log "clean: pnpm store prune -> $_ps_out"
+  printf 'pnpm store: %s\n' "$_ps_out"
+}

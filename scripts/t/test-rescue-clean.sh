@@ -121,4 +121,48 @@ else
   fail absent-key-must-be-orphan
 fi
 
+# --- 4) 目录体积统计 ---
+mkdir -p "$T/sz/a/b"
+# 用固定大小文件避免依赖 block size：8 字节 × 2
+printf '12345678' > "$T/sz/a/f1"
+printf '12345678' > "$T/sz/a/b/f2"
+sz=$(rescue_dir_size_bytes "$T/sz")
+[ "$sz" -ge 16 ] || fail "dir-size-too-small:$sz"
+sz0=$(rescue_dir_size_bytes "$T/does-not-exist")
+[ "$sz0" = 0 ] || fail "dir-size-missing-should-be-0:$sz0"
+
+# --- 5) npm 缓存清理：dry-run 不删，实删只删 _cacache ---
+CACHE="$T/npmcache"
+mkdir -p "$CACHE/_cacache/content-v2" "$CACHE/_logs"
+printf 'cache-blob' > "$CACHE/_cacache/content-v2/blob"
+printf 'log' > "$CACHE/_logs/keep.log"
+NPM_CONFIG_CACHE="$CACHE" npm_config_cache="$CACHE"
+export NPM_CONFIG_CACHE="$CACHE"
+
+rescue_clean_npm_cache 1 >/dev/null 2>&1 || true
+[ -d "$CACHE/_cacache" ] || fail 'dryrun-deleted-npm-cache'
+
+rescue_clean_npm_cache 0 >/dev/null 2>&1 || true
+[ ! -d "$CACHE/_cacache" ] || fail 'real-run-kept-npm-cache'
+[ -d "$CACHE/_logs" ] || fail 'must-not-delete-logs-dir'
+
+# --- 6) pnpm store 清理：dry-run 不调用 prune ---
+# 用 stub pnpm 记录调用，避免依赖真实网络/存储
+STUB="$T/bin"; mkdir -p "$STUB"
+cat > "$STUB/pnpm" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${PNPM_STUB_LOG:?}"
+exit 0
+STUBEOF
+chmod +x "$STUB/pnpm"
+export PATH="$STUB:$PATH"
+export PNPM_STUB_LOG="$T/pnpm-calls"
+: > "$PNPM_STUB_LOG"
+
+rescue_clean_pnpm_store 1 >/dev/null 2>&1 || true
+if [ -s "$PNPM_STUB_LOG" ]; then fail 'dryrun-invoked-pnpm-store'; fi
+
+rescue_clean_pnpm_store 0 >/dev/null 2>&1 || true
+grep -q 'store prune' "$PNPM_STUB_LOG" || fail 'real-run-did-not-prune-store'
+
 echo 'ALL-PASS'
