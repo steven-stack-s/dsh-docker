@@ -23,3 +23,7 @@ extract.mjs
 .tmp-dshsrc/
 .tmp-dshremote/
 .workbuddy/
+
+# 隔离工作区（git worktree）与 SDD 台账目录
+.worktrees/
+.superpowers/
