@@ -84,4 +84,41 @@ if rescue_pnpm_is_orphan '@wenaixi+dsh-superpower@6.3.1_@deepseek-ai+cordis@4.0.
   fail live-package-misjudged-as-orphan
 fi
 
+# --- 4) 匹配必须整行相等（精确），不得因前缀/子串/glob 造成漏删 ---
+# 4a) lockfile 仅存在「以该 key 为前缀」的行时，必须判为孤儿（前缀不等于命中）。
+LOCKS="$DSH_HOME/profiles/web/pnpm-lock.yaml"
+cat > "$LOCKS" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  react@18.2.0+esm20230101:
+    resolution: {integrity: sha512-prefix}
+
+  yaml@2.9.1:
+    resolution: {integrity: sha512-zzz}
+
+snapshots:
+
+  'yaml@2.9.1':
+    dependencies:
+      foo: 1
+EOF
+# 目录名 'react@18.2.0_peer' -> key 'react@18.2.0'，仅为上面首行的前缀，未精确出现 => 孤儿
+if rescue_pnpm_is_orphan 'react@18.2.0_peer' "$LOCKS"; then
+  :
+else
+  fail prefix-line-must-not-suppress-orphan
+fi
+# 4b) 键自身精确存在 -> 必须 live（非孤儿）
+if rescue_pnpm_is_orphan 'react@18.2.0+esm20230101' "$LOCKS"; then
+  fail exact-key-must-stay-live
+fi
+# 4c) 未出现的 key -> 必须孤儿
+if rescue_pnpm_is_orphan 'absolutely-not-locked@9.9.9' "$LOCKS"; then
+  :
+else
+  fail absent-key-must-be-orphan
+fi
+
 echo 'ALL-PASS'

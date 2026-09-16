@@ -647,12 +647,9 @@ rescue_pnpm_is_orphan() {
   _po_dir="$1"; _po_lock="$2"
   _po_key=$(rescue_pnpm_dir_to_key "$_po_dir") || return 1
   _po_keys=$(rescue_pnpm_locked_keys "$_po_lock" 2>/dev/null || printf '')
-  case "
-$_po_keys
-" in
-    *"
-$_po_key
-"*) return 1 ;;
-  esac
+  # 精确整行相等（-x）且按字面量（-F）：避免前缀/子串导致的漏删。
+  if printf '%s\n' "$_po_keys" | grep -qxF "$_po_key"; then
+    return 1
+  fi
   return 0
 }
