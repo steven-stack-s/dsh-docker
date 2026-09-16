@@ -323,7 +323,7 @@ printf '%s' "$out15" | grep -q 'clean: done' || fail 'requirementA-clean-did-not
 # 部分失败必须如实反映，不得静默吞掉
 printf '%s' "$out15" | grep -q 'prune incomplete' || fail 'requirementA-partial-failure-not-reported'
 
-# --- 15) 回滚交互红线：清理孤儿后仍能回滚到清理前的快照 ---
+# --- 16) 回滚交互红线：清理孤儿后仍能回滚到清理前的快照 ---
 # 这是本设计的核心安全性质：clean 只删「当前 lockfile 未引用」的条目，而快照
 # （hardlink 模式下 cp -al 对目录是新建目录 + 硬链接文件）里另有一份独立的目录项，
 # 故回滚会连同 lockfile 一起还原，6.3.1 的条目重新可用。若后续改动破坏该性质，
@@ -346,7 +346,16 @@ printf '6.3.1' > "$R2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.
 
 # 重新 source 以套用新 DSH_HOME（RESCUE_DIR / LOG_FILE 都按 DSH_HOME 派生）
 . "$LIB"
-RESCUE_KEEP=5 REASON_SNAPSHOT='pre-upgrade' rescue_snapshot >/dev/null 2>&1 || fail 'rollback-fixture-snapshot-failed'
+# setUp 必须自身 fail-closed：只验返回值是不够的 —— 若 rescue_snapshot 被改成
+# 「直接 return 0 但什么都没做」，本用例最终断言的「回滚目标重新可用」就会空洞通过
+# （因为快照里从来没有过那个条目，谈不上「重新可用」）。故此处显式断言
+# 刚拍出的快照里确实含有回滚所依赖的 6.3.1 条目。
+snap_pre=$(RESCUE_KEEP=5 REASON_SNAPSHOT='pre-upgrade' rescue_snapshot 2>/dev/null) \
+  || fail 'rollback-fixture-snapshot-failed'
+[ -n "$snap_pre" ] || fail 'rollback-fixture-snapshot-no-name'
+[ -d "$RESCUE_DIR/$snap_pre" ] || fail 'rollback-fixture-snapshot-dir-missing'
+[ -d "$RESCUE_DIR/$snap_pre/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] \
+  || fail 'rollback-fixture-snapshot-missing-rollback-target'
 
 # 升级：lockfile 指向新版本，旧版本变孤儿
 sed -i 's/@wenaixi\/dsh-superpower@6.3.1/@wenaixi\/dsh-superpower@6.3.9/' "$R2/profiles/web/pnpm-lock.yaml"
@@ -380,8 +389,8 @@ grep -qF "'@wenaixi/dsh-superpower@6.3.1':" "$R2/profiles/web/pnpm-lock.yaml" \
 export DSH_HOME="$T/home"
 . "$LIB"
 
-# --- 16) dry-run 全盘零副作用：整棵目录树指纹比对（补充要求 1）---
-# 既有 dry-run 用例（第 7、9 节）只抽查「某个已知目录还在不在」，无法捕捉
+# --- 17) dry-run 全盘零副作用：整棵目录树指纹比对（补充要求 1）---
+# 既有 dry-run 用例（第 7 节与「CLI：默认 dry-run 不产生副作用」一节）只抽查「某个已知目录还在不在」，无法捕捉
 # 「dry-run 删除了**未抽查的其它文件**」这类回归。这里改为对整棵沙箱树做指纹比对：
 # 铺好真实形态的残留（npm _cacache、profile .pnpm 孤儿、evidence/incident 目录），
 # 跑 dry-run 前后要求指纹完全一致。
@@ -459,7 +468,7 @@ fi
 grep -q 'removed' "$D/home/.rescue/log/rescue.log" \
   && fail 'dryrun-full:dryrun-logged-removal'
 
-# --- 17) 审计日志假成功回归：rm 失败时不得打印/记录 removed（补充要求 2）---
+# --- 18) 审计日志假成功回归：rm 失败时不得打印/记录 removed（补充要求 2）---
 # 任务 3 修掉了「rm -rf 失败仍打印/记录 removed」的假成功问题，但当时无任何测试覆盖。
 # 这里用 PATH shim 注入一个恒失败的 rm 真正触发失败分支。
 # 为什么不能靠 chmod：本环境/镜像内是 root，root 无视目录权限位，rm -rf 照样成功。
