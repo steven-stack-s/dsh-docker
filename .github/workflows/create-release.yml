@@ -83,6 +83,16 @@ jobs:
           done
           echo "==== 完成：新建 $created 个，更新 $updated 个 ===="
           echo "查看：https://github.com/steven-stack-s/dsh-docker/releases"
+          # 诊断：把循环的逐条结果写出来，便于定位"绿灯但没建"
+          {
+            echo "created=$created updated=$updated"
+            echo "--- 逐个 tag 的 gh release view 结果 ---"
+            for t in $candidates; do
+              if gh release view "$t" >/dev/null 2>&1; then echo "  EXISTS  $t"; else echo "  MISSING $t"; fi
+            done
+            echo "--- 对 v0.4.3 单独试建（带 GH_TOKEN）---"
+            gh release create "v0.4.3-dsh-0.1.5-rc.2" --title "v0.4.3-dsh-0.1.5-rc.2" --notes "diag probe with token" 2>&1 | head -12 || echo "(create 退出码非0)"
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
       # 诊断：CI 日志需管理员权限，改把本次运行的候选与结果推到 ci-diag 分支（可直接 fetch）。
       # 定位完成后移除。
       - name: Publish run report to ci-diag branch
