@@ -4,6 +4,13 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [Unreleased]
+
+### Added
+- `rescue clean`：升级后环境清理。默认 dry-run 预览，`--yes` 执行前自动拍 pre-clean 快照。
+  清理 npm 缓存、pnpm store 孤儿、profile `.pnpm` 中未被 lockfile 引用的条目与超限救援历史；
+  不触碰依赖基线与快照，不影响 `rescue rollback`。
+
 ## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 
 > 跟进 DSH 预览版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.2` 升至 `0.1.6-alpha.1`

@@ -44,6 +44,32 @@ docker exec dsh dsh --version
 > Rebuild the image when: the base environment changes (Node major version / system dependencies), or you want to update the dsh base version baked into the seed:
 > `docker build --build-arg DSH_VERSION=<version> --build-arg APT_MIRROR=mirrors.aliyun.com -t <your-repo>/dsh-docker:<version> .` and update `DSH_IMAGE` in `.env`.
 
+### Cleaning up after upgrades
+
+Upgrading inside the container over a long period accumulates leftovers that nothing reclaims. Use `rescue clean` to clear them:
+
+```bash
+docker exec dsh rescue clean            # preview (dry-run by default, changes nothing)
+docker exec dsh rescue clean --yes      # apply
+```
+
+It cleans four things (all provably garbage):
+
+| Item | What | Notes |
+|---|---|---|
+| npm download cache | `_cacache` | deleting it only means downloading again |
+| pnpm store orphans | `pnpm store prune` | official semantics: "delete unreferenced only" |
+| profile virtual-store orphans | entries under `.pnpm` not referenced by `pnpm-lock.yaml` | **`pnpm prune` does not clear these**, and they are the main source of leftovers |
+| over-limit rescue history | evidence / incidents | reuses the existing `RESCUE_EVIDENCE_KEEP` / `RESCUE_INCIDENT_KEEP` |
+
+> 🔒 `--yes` takes an **automatic snapshot first** (`reason: pre-clean`) as a fallback point.
+> Cleaning **never** touches `package.json`, `pnpm-lock.yaml`, referenced `.pnpm` entries or any snapshot
+> directory, so it does not affect the ability of `rescue rollback`.
+
+> ⚠ If the profile uses the default `hardlink` snapshot mode, files still referenced by a snapshot keep
+> their inode, so space may not be freed immediately — that is expected; it is reclaimed once the snapshot
+> is rotated out.
+
 ## 2. Install / Remove Plugins
 
 ```bash
