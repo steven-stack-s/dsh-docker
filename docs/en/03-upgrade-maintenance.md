@@ -62,9 +62,19 @@ It cleans four things (all provably garbage):
 | profile virtual-store orphans | entries under `.pnpm` not referenced by `pnpm-lock.yaml` | **`pnpm prune` does not clear these**, and they are the main source of leftovers |
 | over-limit rescue history | evidence / incidents | reuses the existing `RESCUE_EVIDENCE_KEEP` / `RESCUE_INCIDENT_KEEP` |
 
-> 🔒 `--yes` takes an **automatic snapshot first** (`reason: pre-clean`) as a fallback point.
-> Cleaning **never** touches `package.json`, `pnpm-lock.yaml`, referenced `.pnpm` entries or any snapshot
-> directory, so it does not affect the ability of `rescue rollback`.
+> 🔒 `--yes` takes an **automatic snapshot first** (`reason: pre-clean`) as a fallback point, and
+> **verifies that it actually exists** before deleting anything. If that snapshot cannot be created, or is
+> rotated away immediately after being taken (e.g. the retention window is already full), `clean` **warns,
+> exits non-zero and deletes nothing** — it would rather skip cleaning than delete files without a usable
+> rollback point.
+>
+> ⚠ To satisfy the retention window (`RESCUE_KEEP`), taking the pre-clean snapshot **may** evict the oldest
+> **non-pinned** snapshot under the existing rotation policy (snapshots whose reason starts with
+> `boot-healthy` are pinned and never evicted). If an old snapshot you were keeping disappears, raise
+> `RESCUE_KEEP` before cleaning.
+>
+> Apart from that rotation, cleaning **never** touches `package.json`, `pnpm-lock.yaml` or referenced
+> `.pnpm` entries, so it does not affect the ability of `rescue rollback`.
 
 > ⚠ If the profile uses the default `hardlink` snapshot mode, files still referenced by a snapshot keep
 > their inode, so space may not be freed immediately — that is expected; it is reclaimed once the snapshot

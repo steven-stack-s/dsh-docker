@@ -10,6 +10,18 @@
 - `rescue clean`：升级后环境清理。默认 dry-run 预览，`--yes` 执行前自动拍 pre-clean 快照。
   清理 npm 缓存、pnpm store 孤儿、profile `.pnpm` 中未被 lockfile 引用的条目与超限救援历史；
   不触碰依赖基线与快照，不影响 `rescue rollback`。
+- 新环境变量 `NPM_CONFIG_CACHE`：容器内 npm / pnpm 的下载缓存目录。留空时自动探测
+  （`npm config get cache`，通常为 `/root/.npm`）；该路径不可写时可指向挂载的卷。
+  `rescue clean` 会清空其中的 `_cacache`。（`docker-compose.yml` 与 07 环境变量速查表已登记。）
+
+### Fixed
+- `rescue clean --yes` 的 pre-clean 快照护栏现在会**校验快照确实存在**后再执行删除。
+  此前 `rescue_snapshot` 尾部的轮转会与既有快照竞争同一个 `RESCUE_KEEP` 窗口：窗口已满
+  （尤其被 pinned 的 `boot-healthy` 占满）时，刚拍的 pre-clean 快照会被自己淘汰，而 CLI 仍
+  打印「snapshot created」并以 0 退出 —— 用户被告知有回退点、实际没有。现在该场景会**告警、
+  以非零退出且不删除任何文件**（fail-closed）。
+- `rescue clean` 的清理项失败不再静默：`npm-cache` / `pnpm-store` / `pnpm-orphans` /
+  `rescue-history` 中任一项失败都会在 CLI 侧汇总回显（保留「不中断整体流程」的容错语义）。
 
 ## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 

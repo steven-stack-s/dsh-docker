@@ -69,7 +69,7 @@ node_modules/.pnpm/ 同时存在：
 ## 3. 命令接口
 
 ```bash
-rescue clean [--dry-run|-n] [--yes] [--json]
+rescue clean [--dry-run|-n] [--yes]
 ```
 
 | 选项 | 语义 |
@@ -77,7 +77,6 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 | 无参数 | **默认即 dry-run**：只打印将清理的内容与可回收空间，不做任何改动 |
 | `--yes` | 确认执行真实清理 |
 | `--dry-run` / `-n` | 显式 dry-run（与默认同义，供脚本可读性） |
-| `--json` | 机器可读输出，供 CI / 诊断包消费 |
 
 ## 4. 清理范围
 
@@ -108,6 +107,16 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 `rescue clean --yes` 在真删前自动执行 `REASON_SNAPSHOT="pre-clean"` 的快照，沿用 `rescue_snapshot`。因此自动纳入既有 `RESCUE_KEEP` 轮转与基线钉住逻辑（`rescue_prune_pinned`），**不新增淘汰规则**。
 
 仅在 profile 存在且有 `package.json` 时拍快照（`rescue_snapshot` 的既有前置条件）。
+
+**快照护栏必须「验后置条件」**（评审 C1 修复）：`rescue_snapshot` 尾部会无条件调用 `rescue_prune`，
+新拍的快照会与既有快照竞争同一个 `RESCUE_KEEP` 窗口 —— 窗口已满（尤其被 pinned 的 `boot-healthy`
+占满）时，刚拍的 pre-clean 快照会被**自己**淘汰。若只凭「`rescue_snapshot` 返回 0」就宣布护栏就绪，
+就会出现「CLI 打印 snapshot created + 退出 0，实际没有任何 pre-clean 快照」这种**谎报安全网**的
+最危险形态。因此 `clean` 必须捕获快照名并校验其目录确实存在；校验不过则 **fail-closed**：
+打印 WARN、**以非零退出**、且**不执行任何删除动作**。
+
+> 副作用说明：在护栏可用（快照幸存）的前提下，为满足保留窗口，拍 pre-clean 快照**仍可能**按既有
+> 轮转策略淘汰最老的**非 pinned** 快照。这是快照机制的固有行为，`clean` 不改变它，文档需如实说明。
 
 **第二层：默认 dry-run**
 
@@ -183,14 +192,14 @@ inode，任何就地改写（append / `sed -i` / 原生模块重编）会同时�
 | `rescue_clean_pnpm_orphans` | 解析 `pnpm-lock.yaml` 引用集，列出/删除未引用的 `.pnpm/<dir>` |
 | `rescue_clean_pnpm_store` | 调 `pnpm store prune`（官方只删 unreferenced） |
 | `rescue_clean_rescue_history` | 显式触发 C4：调用**既有** `rescue_evidence_prune` 与 `rescue_incident_prune`，不新写轮转逻辑 |
-| `rescue_clean_report` | 汇总输出（dry-run 与实际共用格式） |
 
-> C4 复用既有实现：`rescue_evidence_prune`（位于 `scripts/rescue-supervise.sh`，保留数取
+> C4 复用既有实现：`rescue_evidence_prune`（位于 `scripts/librescue.sh`，保留数取
 > `${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}`）与 `rescue_incident_prune`（位于 `scripts/librescue.sh`，
 > 保留数取 `${RESCUE_INCIDENT_KEEP:-20}`）均已存在，本功能只做显式触发，不重复实现轮转。
 >
-> 注意：`rescue_evidence_prune` 定义在 supervise 侧，而 `rescue clean` 走的是 `scripts/rescue` → librescue
-> 路径。实现时需确认其在 CLI 上下文中的可见性，必要时按 `rescue_incident_prune` 的方式下沉到 librescue。
+> 注意（已订正）：`rescue_evidence_prune` 原定义在 `scripts/rescue-supervise.sh`，而 `rescue clean`
+> 走的是 `scripts/rescue` → librescue 路径，在原位置 CLI 上下文**不可见**。该函数**已下沉（复制）到
+> `scripts/librescue.sh`**，supervise 侧改为复用 librescue 的同名实现，不再重复定义。
 
 **风格约束**（与 librescue 现状一致）：不设 `set -u/-e`、全部 `${VAR:-default}`、用 `rescue_log` 记审计、失败不终止调用方。
 
@@ -198,8 +207,10 @@ inode，任何就地改写（append / `sed -i` / 原生模块重编）会同时�
 
 ```sh
 clean)
-  # --yes 才真删；--dry-run/-n 显式预览；--json 机器可读
+  # --yes 才真删；--dry-run/-n 显式预览
   # 真删前：REASON_SNAPSHOT="pre-clean" rescue_snapshot（仅 profile 存在且有 package.json）
+  # 并校验该快照确实存在；不存在则 WARN + 非零退出 + 不删除任何文件（fail-closed，见 §5 第一层）
+  # 各清理项失败不中断整体，但必须汇总回显给用户
   ;;
 ```
 

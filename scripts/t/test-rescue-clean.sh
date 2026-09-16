@@ -121,7 +121,7 @@ else
   fail absent-key-must-be-orphan
 fi
 
-# --- 4) 目录体积统计 ---
+# --- 5) 目录体积统计 ---
 mkdir -p "$T/sz/a/b"
 # 用固定大小文件避免依赖 block size：8 字节 × 2
 printf '12345678' > "$T/sz/a/f1"
@@ -131,7 +131,7 @@ sz=$(rescue_dir_size_bytes "$T/sz")
 sz0=$(rescue_dir_size_bytes "$T/does-not-exist")
 [ "$sz0" = 0 ] || fail "dir-size-missing-should-be-0:$sz0"
 
-# --- 5) npm 缓存清理：dry-run 不删，实删只删 _cacache ---
+# --- 6) npm 缓存清理：dry-run 不删，实删只删 _cacache ---
 CACHE="$T/npmcache"
 mkdir -p "$CACHE/_cacache/content-v2" "$CACHE/_logs"
 printf 'cache-blob' > "$CACHE/_cacache/content-v2/blob"
@@ -146,7 +146,7 @@ rescue_clean_npm_cache 0 >/dev/null 2>&1 || true
 [ ! -d "$CACHE/_cacache" ] || fail 'real-run-kept-npm-cache'
 [ -d "$CACHE/_logs" ] || fail 'must-not-delete-logs-dir'
 
-# --- 6) pnpm store 清理：dry-run 不调用 prune ---
+# --- 7) pnpm store 清理：dry-run 不调用 prune ---
 # 用 stub pnpm 记录调用，避免依赖真实网络/存储
 STUB="$T/bin"; mkdir -p "$STUB"
 cat > "$STUB/pnpm" <<'STUBEOF'
@@ -165,7 +165,7 @@ if [ -s "$PNPM_STUB_LOG" ]; then fail 'dryrun-invoked-pnpm-store'; fi
 rescue_clean_pnpm_store 0 >/dev/null 2>&1 || true
 grep -q 'store prune' "$PNPM_STUB_LOG" || fail 'real-run-did-not-prune-store'
 
-# --- 7) profile 孤儿清理：被引用者绝不删 ---
+# --- 8) profile 孤儿清理：被引用者绝不删 ---
 P="$DSH_HOME/profiles/web"
 mkdir -p "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" \
          "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" \
@@ -203,17 +203,17 @@ rescue_clean_pnpm_orphans "$P" 0 >/dev/null 2>&1 || true
 [ "$before_pkg" = "$(cksum < "$P/package.json")" ] || fail 'REDLINE-package.json-modified'
 [ "$before_lock" = "$(cksum < "$P/pnpm-lock.yaml")" ] || fail 'REDLINE-lockfile-modified'
 
-# --- 8) 救援历史轮转函数在 librescue 上下文可用（可见性回归）---
+# --- 9) 救援历史轮转函数在 librescue 上下文可用（可见性回归）---
 command -v rescue_evidence_prune >/dev/null 2>&1 || fail 'evidence-prune-not-visible-in-librescue'
 command -v rescue_incident_prune >/dev/null 2>&1 || fail 'incident-prune-not-visible-in-librescue'
 rescue_clean_rescue_history >/dev/null 2>&1 || fail 'rescue-history-clean-failed'
 
-# --- 9) 锁文件格式不匹配 / 解析不出键时，必须保守跳过（Critical 红线）---
+# --- 10) 锁文件格式不匹配 / 解析不出键时，必须保守跳过（Critical 红线）---
 # 设计原则：区分「我确认这些条目无引用」与「我无法判断谁有引用」。
 # 前者才可删；后者必须原样保留整棵树。
 command -v rescue_clean_pnpm_orphans >/dev/null 2>&1 || fail 'function-missing:rescue_clean_pnpm_orphans'
 
-# 9a) pnpm v6 风格锁文件：键形如 /react@18.2.0（带前导斜杠）
+# 10a) pnpm v6 风格锁文件：键形如 /react@18.2.0（带前导斜杠）
 G="$T/guard"; PG="$G/profiles/web"
 mkdir -p "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp" "$PG/node_modules/.pnpm/react@18.2.0_aa"
 printf 'a' > "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp/f"
@@ -240,7 +240,7 @@ rescue_clean_pnpm_orphans "$PG" 0 >/dev/null 2>&1 || true
 [ -d "$PG/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-v6-lockfile-wiped-referenced-entry'
 [ -d "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp" ] || fail 'CRITICAL-v6-lockfile-wiped-scoped-entry'
 
-# 9b) 0 字节锁文件 → 解析不出任何键 → 必须整棵保留
+# 10b) 0 字节锁文件 → 解析不出任何键 → 必须整棵保留
 G2="$T/guard-empty"; PG2="$G2/profiles/web"
 mkdir -p "$PG2/node_modules/.pnpm/react@18.2.0_aa"
 printf 'b' > "$PG2/node_modules/.pnpm/react@18.2.0_aa/f"
@@ -249,7 +249,7 @@ printf '%s' '{"name":"web"}' > "$PG2/package.json"
 rescue_clean_pnpm_orphans "$PG2" 0 >/dev/null 2>&1 || true
 [ -d "$PG2/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-empty-lockfile-wiped-tree'
 
-# 9c) 缺 snapshots: 段（截断/损坏）→ 解析不出键 → 必须整棵保留
+# 10c) 缺 snapshots: 段（截断/损坏）→ 解析不出键 → 必须整棵保留
 G3="$T/guard-trunc"; PG3="$G3/profiles/web"
 mkdir -p "$PG3/node_modules/.pnpm/react@18.2.0_aa"
 printf 'b' > "$PG3/node_modules/.pnpm/react@18.2.0_aa/f"
@@ -258,7 +258,7 @@ printf 'lockfileVersion: 9.0\n' > "$PG3/pnpm-lock.yaml"
 rescue_clean_pnpm_orphans "$PG3" 0 >/dev/null 2>&1 || true
 [ -d "$PG3/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-truncated-lockfile-wiped-tree'
 
-# --- 9) CLI：默认 dry-run 不产生副作用、不拍快照 ---
+# --- 11) CLI：默认 dry-run 不产生副作用、不拍快照 ---
 RESCUE="$ROOT/scripts/rescue"
 [ -x "$RESCUE" ] || fail 'rescue-not-executable'
 rm -rf "$RESCUE_DIR"/snap-*
@@ -268,12 +268,12 @@ after_n=$(ls -1d "$RESCUE_DIR"/snap-* 2>/dev/null | wc -l | tr -d ' ')
 [ "$before_n" = "$after_n" ] || fail 'dryrun-created-snapshot'
 [ -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.0-dsh.10_peer_bb" ] || fail 'dryrun-removed-live-entry'
 
-# --- 10) CLI：usage 串包含 clean ---
+# --- 12) CLI：usage 串包含 clean ---
 sh "$RESCUE" >/dev/null 2>&1 || true
 usage=$(sh "$RESCUE" 2>&1 || true)
 printf '%s' "$usage" | grep -q 'clean' || fail 'usage-missing-clean'
 
-# --- 11) CLI：--yes 拍 pre-clean 快照 ---
+# --- 13) CLI：--yes 拍 pre-clean 快照 ---
 # 重建一份孤儿，确保有东西可清
 mkdir -p "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz"
 printf 'junk' > "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz/index.js"
@@ -283,17 +283,17 @@ ls -1d "$RESCUE_DIR"/snap-* >/dev/null 2>&1 || fail 'clean-yes-created-no-snapsh
 grep -q '"reason":"pre-clean"' "$RESCUE_DIR"/snap-*/meta.json || fail 'pre-clean-reason-missing'
 [ ! -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.9_peer_zz" ] || fail 'clean-yes-did-not-remove-orphan'
 
-# --- 12) CLI：未知选项须报错退出（非 0）---
+# --- 14) CLI：未知选项须报错退出（非 0）---
 if sh "$RESCUE" clean --bogus >/dev/null 2>&1; then fail 'unknown-option-should-fail'; fi
 
-# --- 13) 红线：--yes 后 package.json 与 lockfile 仍字节级不变 ---
+# --- 15) 红线：--yes 后 package.json 与 lockfile 仍字节级不变 ---
 [ "$before_pkg" = "$(cksum < "$P/package.json")" ] || fail 'REDLINE-yes-package.json-modified'
 [ "$before_lock" = "$(cksum < "$P/pnpm-lock.yaml")" ] || fail 'REDLINE-yes-lockfile-modified'
 
-# --- 14) 与自愈预算解耦 ---
+# --- 16) 与自愈预算解耦 ---
 [ ! -f "$RESCUE_DIR/state/selfheal.json" ] || fail 'clean-touched-selfheal-budget'
 
-# --- 15) 要求 A：rescue history 轮转失败不得中断整个 clean（部分失败须如实反映）---
+# --- 17) 要求 A：rescue history 轮转失败不得中断整个 clean（部分失败须如实反映）---
 # 构造真实故障：把 scripts/ 整棵复制到沙箱，并在副本里删掉 rescue_evidence_prune /
 # rescue_incident_prune 的定义（等价于任务 3 修掉的「函数在 librescue 里不可见」回归）。
 # 此时 rescue_clean_rescue_history 的真实契约是打印 "prune incomplete" 并返回非 0。
@@ -323,7 +323,7 @@ printf '%s' "$out15" | grep -q 'clean: done' || fail 'requirementA-clean-did-not
 # 部分失败必须如实反映，不得静默吞掉
 printf '%s' "$out15" | grep -q 'prune incomplete' || fail 'requirementA-partial-failure-not-reported'
 
-# --- 16) 回滚交互红线：清理孤儿后仍能回滚到清理前的快照 ---
+# --- 18) 回滚交互红线：清理孤儿后仍能回滚到清理前的快照 ---
 # 这是本设计的核心安全性质：clean 只删「当前 lockfile 未引用」的条目，而快照
 # （hardlink 模式下 cp -al 对目录是新建目录 + 硬链接文件）里另有一份独立的目录项，
 # 故回滚会连同 lockfile 一起还原，6.3.1 的条目重新可用。若后续改动破坏该性质，
@@ -389,8 +389,8 @@ grep -qF "'@wenaixi/dsh-superpower@6.3.1':" "$R2/profiles/web/pnpm-lock.yaml" \
 export DSH_HOME="$T/home"
 . "$LIB"
 
-# --- 17) dry-run 全盘零副作用：整棵目录树指纹比对（补充要求 1）---
-# 既有 dry-run 用例（第 7 节与「CLI：默认 dry-run 不产生副作用」一节）只抽查「某个已知目录还在不在」，无法捕捉
+# --- 19) dry-run 全盘零副作用：整棵目录树指纹比对（补充要求 1）---
+# 既有 dry-run 用例（见「profile 孤儿清理：被引用者绝不删」与「CLI：默认 dry-run 不产生副作用」两节）只抽查「某个已知目录还在不在」，无法捕捉
 # 「dry-run 删除了**未抽查的其它文件**」这类回归。这里改为对整棵沙箱树做指纹比对：
 # 铺好真实形态的残留（npm _cacache、profile .pnpm 孤儿、evidence/incident 目录），
 # 跑 dry-run 前后要求指纹完全一致。
@@ -468,7 +468,7 @@ fi
 grep -q 'removed' "$D/home/.rescue/log/rescue.log" \
   && fail 'dryrun-full:dryrun-logged-removal'
 
-# --- 18) 审计日志假成功回归：rm 失败时不得打印/记录 removed（补充要求 2）---
+# --- 20) 审计日志假成功回归：rm 失败时不得打印/记录 removed（补充要求 2）---
 # 任务 3 修掉了「rm -rf 失败仍打印/记录 removed」的假成功问题，但当时无任何测试覆盖。
 # 这里用 PATH shim 注入一个恒失败的 rm 真正触发失败分支。
 # 为什么不能靠 chmod：本环境/镜像内是 root，root 无视目录权限位，rm -rf 照样成功。
@@ -530,6 +530,126 @@ if grep -q "clean: removed pnpm orphan $ORPHAN3" "$LOG3"; then
 fi
 # 主断言 ③：条目确实没被删（失败的事实与日志一致）
 [ -d "$R3/profiles/web/node_modules/.pnpm/$ORPHAN3" ] || fail 'logfailsuccess:entry-vanished-despite-rm-failure'
+
+export DSH_HOME="$T/home"
+. "$LIB"
+
+# --- 21) C1 护栏不被自我抵消：正常窗口下 clean --yes 后 pre-clean 快照必须真的存在 ---
+# 这是「删除前一定有可用回退点」这条安全承诺的最小回归。历史缺陷：rescue_snapshot 尾部
+# 无条件调用 rescue_prune，新拍的 pre-clean 快照会与既有快照竞争同一个 RESCUE_KEEP 窗口，
+# 窗口满时会把自己轮转掉 —— 而 CLI 仍打印 'pre-clean snapshot created'，即**谎报**存在回退点。
+# 本用例断言：CLI 声称创建成功时，该快照必须真的能定位到（meta.json 存在且 reason=pre-clean）。
+C1="$T/c1-normal"; export DSH_HOME="$C1"
+mkdir -p "$C1/profiles/web"
+printf '%s' '{"name":"web"}' > "$C1/profiles/web/package.json"
+. "$LIB"
+# 再造一个既有快照，使窗口内不止一份（窗口尚未满）
+RESCUE_KEEP=5 REASON_SNAPSHOT='pre-existing' rescue_snapshot >/dev/null 2>&1 || fail 'c1-normal:fixture-snapshot-failed'
+set +e
+out19=$(RESCUE_KEEP=5 sh "$RESCUE" clean --yes 2>&1)
+rc19=$?
+set -e
+[ "$rc19" = 0 ] || fail "c1-normal:clean-failed:rc=$rc19"
+printf '%s' "$out19" | grep -q 'pre-clean snapshot created' || fail 'c1-normal:no-created-message'
+# 主断言：CLI 说创建了，就必须真有一份 reason=pre-clean 的快照
+found19=0
+for d in "$RESCUE_DIR"/snap-*; do
+  [ -d "$d" ] || continue
+  grep -q '"reason":"pre-clean"' "$d/meta.json" 2>/dev/null && found19=1
+done
+[ "$found19" = 1 ] || { echo "--- output ---"; printf '%s\n' "$out19"; fail 'c1-normal:claimed-snapshot-does-not-exist'; }
+
+# --- 22) C1 保留窗口已满 + pinned 基线：护栏不可用时必须中止且不得执行删除 ---
+# 复现控制器给出的面向 A：RESCUE_KEEP=1 且已有 pinned 的 boot-healthy 快照。
+# 此时 rescue_prune_victim 会跳过 pinned 项，选中**刚拍的 pre-clean 快照**作为淘汰对象。
+# 契约（二者必居其一，且必须可复现）：
+#   (a) 护栏快照在 clean 结束后仍存在（实现成功保住了它），或
+#   (b) CLI 非零退出，且**没有执行任何删除动作**（fail-closed）
+# 绝不允许第三种结果：打印「创建成功」+ 退出 0 + 护栏其实不存在（谎报）。
+C2="$T/c1-full"; export DSH_HOME="$C2"
+mkdir -p "$C2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa"
+printf '6.3.1' > "$C2/profiles/web/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa/index.js"
+printf '%s' '{"name":"web"}' > "$C2/profiles/web/package.json"
+cat > "$C2/profiles/web/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: '9.0'
+
+packages:
+
+  '@wenaixi/dsh-superpower@6.3.9':
+    resolution: {integrity: sha512-yyy}
+
+snapshots:
+EOF
+. "$LIB"
+# pinned 的 boot-healthy 基线（rescue_prune_pinned 认这个 reason 前缀）
+snap_pin=$(RESCUE_KEEP=1 REASON_SNAPSHOT='boot-healthy' rescue_snapshot 2>/dev/null) \
+  || fail 'c1-full:fixture-pinned-snapshot-failed'
+[ -n "$snap_pin" ] || fail 'c1-full:fixture-pinned-no-name'
+[ -d "$RESCUE_DIR/$snap_pin" ] || fail 'c1-full:fixture-pinned-dir-missing'
+# 前置断言（防空洞）：pinned 判定必须对该 reason 生效，否则本用例根本没在测「窗口被 pinned 占满」
+pin_seen=$(rescue_prune_pinned 2>/dev/null)
+[ "$pin_seen" = "$snap_pin" ] || fail "c1-full:pinned-not-recognized:$pin_seen"
+ORPHAN20='@wenaixi+dsh-superpower@6.3.1_peer_aa'
+[ -d "$C2/profiles/web/node_modules/.pnpm/$ORPHAN20" ] || fail 'c1-full:fixture-orphan-missing'
+
+set +e
+out20=$(RESCUE_KEEP=1 sh "$RESCUE" clean --yes 2>&1)
+rc20=$?
+set -e
+# 护栏是否真的还在？（reason=pre-clean 的快照）
+guard20=0
+for d in "$RESCUE_DIR"/snap-*; do
+  [ -d "$d" ] || continue
+  grep -q '"reason":"pre-clean"' "$d/meta.json" 2>/dev/null && guard20=1
+done
+# pinned 基线在任何情况下都必须幸存
+[ -d "$RESCUE_DIR/$snap_pin" ] || { echo "--- output ---"; printf '%s\n' "$out20"; fail 'c1-full:pinned-baseline-destroyed'; }
+
+if [ "$guard20" = 1 ]; then
+  # 分支 (a)：护栏可用 —— 那样 clean 必须成功结束
+  [ "$rc20" = 0 ] || fail "c1-full:guard-ok-but-nonzero-exit:rc=$rc20"
+else
+  # 分支 (b)：护栏不可用 —— 必须 fail-closed：非零退出，且绝不能执行删除
+  [ "$rc20" != 0 ] || { echo "--- output ---"; printf '%s\n' "$out20"; fail 'c1-full:claimed-created-then-lost-guard-and-exited-0'; }
+  [ -d "$C2/profiles/web/node_modules/.pnpm/$ORPHAN20" ] \
+    || fail 'c1-full:deleted-despite-missing-guardrail'
+  printf '%s' "$out20" | grep -qi 'WARN' || fail 'c1-full:no-warning-on-missing-guardrail'
+fi
+
+# --- 23) I1：清理项失败必须回显给用户（不得静默）---
+# 既有缺陷：clean 分支用 `|| true` 吞掉返回码，而 rescue_clean_pnpm_store 失败时
+# 只写审计日志、不打印任何东西 —— 用户只看到 'clean: done'，完全不知道有清理项失败。
+# 契约：保留容错（不中断、仍以 0 结束），但必须在 CLI 汇总里明确告知「部分清理项失败」。
+# 注入：把 pnpm 换成「命令存在但 store prune 失败」的 stub，触发 rescue_clean_pnpm_store 返回 1。
+C3="$T/i1-fail"; export DSH_HOME="$C3"
+mkdir -p "$C3/profiles/web"
+printf '%s' '{"name":"web"}' > "$C3/profiles/web/package.json"
+. "$LIB"
+STUB21="$T/bin-i1"; mkdir -p "$STUB21"
+cat > "$STUB21/pnpm" <<'I1STUB'
+#!/bin/sh
+# 模拟 pnpm 存在但 store prune 失败（如只读 store / EACCES）
+exit 1
+I1STUB
+chmod +x "$STUB21/pnpm"
+SAVED_PATH21="$PATH"
+export PATH="$STUB21:$PATH"
+# 控制组（防空洞）：确认在该 PATH 下 store prune 路径确实会失败
+if rescue_clean_pnpm_store 0 >/dev/null 2>&1; then
+  export PATH="$SAVED_PATH21"
+  fail 'i1:control-store-prune-shim-ineffective'
+fi
+set +e
+out21=$(sh "$RESCUE" clean --yes 2>&1)
+rc21=$?
+set -e
+export PATH="$SAVED_PATH21"
+# 容错语义必须保留：失败不得中断整个流程
+[ "$rc21" = 0 ] || fail "i1:failure-aborted-clean:rc=$rc21"
+printf '%s' "$out21" | grep -q 'clean: done' || fail 'i1:clean-did-not-complete'
+# 主断言：失败必须被汇总回显（对用户可见）
+printf '%s' "$out21" | grep -qi 'WARN\|失败\|failed' \
+  || { echo "--- output ---"; printf '%s\n' "$out21"; fail 'i1:cleanup-failure-not-surfaced-to-user'; }
 
 export DSH_HOME="$T/home"
 . "$LIB"

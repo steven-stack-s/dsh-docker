@@ -160,18 +160,42 @@ case "$cmd" in
       exit 0
     fi
     # ---- 真实清理：先拍快照作为护栏（仅 profile 就绪时）----
+    # 护栏必须「验后置条件」：rescue_snapshot 尾部会无条件调用 rescue_prune，新拍的快照与既有
+    # 快照竞争同一个 RESCUE_KEEP 窗口 —— 窗口已满（尤其被 pinned 的 boot-healthy 占满）时，
+    # 刚拍的 pre-clean 快照会被自己轮转掉。若只凭「调用返回 0」就宣布护栏就绪，就会在**没有**
+    # 回退点的情况下照常删除，并谎报「snapshot created」——安全网静默消失，这是最危险的形态。
+    # 因此这里捕获快照名并显式校验其存在性；校验不过则 fail-closed：只告警、不删任何东西。
     pdir=$(profile_dir)
+    snap_guard=''
     if [ -d "$pdir" ] && [ -f "$pdir/package.json" ]; then
-      REASON_SNAPSHOT='pre-clean' rescue_snapshot >/dev/null 2>&1 \
-        && echo 'clean: pre-clean snapshot created' \
-        || echo 'clean: WARN pre-clean snapshot failed; continuing'
+      snap_guard=$(REASON_SNAPSHOT='pre-clean' rescue_snapshot 2>/dev/null || printf '')
+      if [ -n "$snap_guard" ] && [ -d "$RESCUE_DIR/$snap_guard" ]; then
+        echo "clean: pre-clean snapshot created ($snap_guard)"
+      else
+        # 快照创建失败，或拍完即被轮转淘汰 —— 两种情况下都没有可用回退点。
+        if [ -n "$snap_guard" ]; then
+          echo "clean: WARN pre-clean snapshot $snap_guard was rotated away before cleanup"
+        else
+          echo 'clean: WARN pre-clean snapshot could not be created'
+        fi
+        echo 'clean: aborting WITHOUT deleting anything (no usable rollback point).'
+        echo 'clean: free up snapshot space first, then re-run: rescue snapshots'
+        exit 1
+      fi
     else
       echo "clean: no profile at $pdir — skipping snapshot"
     fi
-    rescue_clean_npm_cache 0 || true
-    rescue_clean_pnpm_store 0 || true
-    rescue_clean_pnpm_orphans "$pdir" 0 || true
-    rescue_clean_rescue_history || true
+    # 各清理项：保留容错语义（单项失败不中断整体），但失败必须汇总回显 —— 否则用户只见
+    # 'clean: done'，而 rescue_clean_npm_cache / pnpm_store / rescue_history 失败时只写审计日志。
+    clean_failed=''
+    rescue_clean_npm_cache 0 || clean_failed="$clean_failed npm-cache"
+    rescue_clean_pnpm_store 0 || clean_failed="$clean_failed pnpm-store"
+    rescue_clean_pnpm_orphans "$pdir" 0 || clean_failed="$clean_failed pnpm-orphans"
+    rescue_clean_rescue_history || clean_failed="$clean_failed rescue-history"
+    if [ -n "$clean_failed" ]; then
+      echo "clean: WARN some cleanup steps failed:$clean_failed"
+      echo "clean: 部分清理项失败（详见审计日志 $LOG_FILE）；其余项已完成"
+    fi
     echo 'clean: done'
     ;;
   verify)
