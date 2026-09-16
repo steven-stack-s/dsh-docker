@@ -69,7 +69,7 @@ node_modules/.pnpm/ 同时存在：
 ## 3. 命令接口
 
 ```bash
-rescue clean [--dry-run|-n] [--yes] [--json]
+rescue clean [--dry-run|-n] [--yes]
 ```
 
 | 选项 | 语义 |
@@ -77,7 +77,6 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 | 无参数 | **默认即 dry-run**：只打印将清理的内容与可回收空间，不做任何改动 |
 | `--yes` | 确认执行真实清理 |
 | `--dry-run` / `-n` | 显式 dry-run（与默认同义，供脚本可读性） |
-| `--json` | 机器可读输出，供 CI / 诊断包消费 |
 
 ## 4. 清理范围
 
@@ -108,6 +107,16 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 `rescue clean --yes` 在真删前自动执行 `REASON_SNAPSHOT="pre-clean"` 的快照，沿用 `rescue_snapshot`。因此自动纳入既有 `RESCUE_KEEP` 轮转与基线钉住逻辑（`rescue_prune_pinned`），**不新增淘汰规则**。
 
 仅在 profile 存在且有 `package.json` 时拍快照（`rescue_snapshot` 的既有前置条件）。
+
+**快照护栏必须「验后置条件」**（评审 C1 修复）：`rescue_snapshot` 尾部会无条件调用 `rescue_prune`，
+新拍的快照会与既有快照竞争同一个 `RESCUE_KEEP` 窗口 —— 窗口已满（尤其被 pinned 的 `boot-healthy`
+占满）时，刚拍的 pre-clean 快照会被**自己**淘汰。若只凭「`rescue_snapshot` 返回 0」就宣布护栏就绪，
+就会出现「CLI 打印 snapshot created + 退出 0，实际没有任何 pre-clean 快照」这种**谎报安全网**的
+最危险形态。因此 `clean` 必须捕获快照名并校验其目录确实存在；校验不过则 **fail-closed**：
+打印 WARN、**以非零退出**、且**不执行任何删除动作**。
+
+> 副作用说明：在护栏可用（快照幸存）的前提下，为满足保留窗口，拍 pre-clean 快照**仍可能**按既有
+> 轮转策略淘汰最老的**非 pinned** 快照。这是快照机制的固有行为，`clean` 不改变它，文档需如实说明。
 
 **第二层：默认 dry-run**
 
@@ -149,6 +158,28 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 - 故「清理回收了多少空间」应按 inode 引用计数估算，不能按 `du` 目测。
 - 报告输出需对此保持诚实：区分「已释放」与「仍被快照引用」。
 
+### 6.2 treeHash / `rescue verify` 能检测什么、不能检测什么
+
+**能检测：快照内容被就地改写。** `snapshot_tree_hash` 的摘要含
+`%p`（路径）/ `%y`（类型）/ `%s`（大小）/ `%T@`（mtime）/ `%i`（inode），在**拍快照时**计算并写入
+`meta.json`；`rescue verify` 重算同一摘要与 `meta.treeHash` 比对。hardlink 模式下快照与 live 共享
+inode，任何就地改写（append / `sed -i` / 原生模块重编）会同时改变两边 size 与 mtime，摘要随之变化
+—— 这正是 `test-snapshot-integrity.sh` 用例 3 固化的行为（copy 模式的用例 4 则断言其免疫）。
+
+**不能检测：快照模式退化（hardlink → copy）。** 需要明确区分两件事：
+
+- `snapshot_tree_hash` 确实把 inode 计入摘要，因此同一棵树按 `cp -al` 与按 `cp -a` 拍出的快照
+  **hash 必然不同**（已实测：同一源树下两种模式摘要不同）；
+- **但 treeHash 只在「拍快照时」计算、只在 `rescue verify` 时与 `meta.json` 自比对**。它是
+  「快照是否被改动过」的自洽校验，**不是**「快照是不是 hardlink 模式」的断言 ——
+  `rescue_verify` 只把 `meta.mode` 用于**打印**，从不校验它与实际的 `cp -al` / `cp -a` 行为是否一致，
+  也没有任何断言强制「快照必须是 hardlink 模式」。
+
+因此：**若有人把 `cp -al` 改成 `cp -a`（或设 `RESCUE_SNAPSHOT_MODE=copy`），不会被任何现有测试捕获**
+—— 这是**已知盲区**，不在本功能的覆盖范围内，此处如实记录而非声称已覆盖。其影响面也有限：模式退化
+只会让快照不再与 live 共享 inode（即变为更安全、更占空间的副本），不会让快照静默失真；
+真正会失真的是 `6.1` 所述的「空间不立即回收」语义 —— 而那是**报告准确性问题**，不是**数据可信性问题**。
+
 ## 7. 实现落点
 
 遵循项目既有分层（纯函数入库、CLI 只做分发）：
@@ -161,14 +192,14 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 | `rescue_clean_pnpm_orphans` | 解析 `pnpm-lock.yaml` 引用集，列出/删除未引用的 `.pnpm/<dir>` |
 | `rescue_clean_pnpm_store` | 调 `pnpm store prune`（官方只删 unreferenced） |
 | `rescue_clean_rescue_history` | 显式触发 C4：调用**既有** `rescue_evidence_prune` 与 `rescue_incident_prune`，不新写轮转逻辑 |
-| `rescue_clean_report` | 汇总输出（dry-run 与实际共用格式） |
 
-> C4 复用既有实现：`rescue_evidence_prune`（位于 `scripts/rescue-supervise.sh`，保留数取
+> C4 复用既有实现：`rescue_evidence_prune`（位于 `scripts/librescue.sh`，保留数取
 > `${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}`）与 `rescue_incident_prune`（位于 `scripts/librescue.sh`，
 > 保留数取 `${RESCUE_INCIDENT_KEEP:-20}`）均已存在，本功能只做显式触发，不重复实现轮转。
 >
-> 注意：`rescue_evidence_prune` 定义在 supervise 侧，而 `rescue clean` 走的是 `scripts/rescue` → librescue
-> 路径。实现时需确认其在 CLI 上下文中的可见性，必要时按 `rescue_incident_prune` 的方式下沉到 librescue。
+> 注意（已订正）：`rescue_evidence_prune` 原定义在 `scripts/rescue-supervise.sh`，而 `rescue clean`
+> 走的是 `scripts/rescue` → librescue 路径，在原位置 CLI 上下文**不可见**。该函数**已下沉（复制）到
+> `scripts/librescue.sh`**，supervise 侧改为复用 librescue 的同名实现，不再重复定义。
 
 **风格约束**（与 librescue 现状一致）：不设 `set -u/-e`、全部 `${VAR:-default}`、用 `rescue_log` 记审计、失败不终止调用方。
 
@@ -176,8 +207,10 @@ rescue clean [--dry-run|-n] [--yes] [--json]
 
 ```sh
 clean)
-  # --yes 才真删；--dry-run/-n 显式预览；--json 机器可读
+  # --yes 才真删；--dry-run/-n 显式预览
   # 真删前：REASON_SNAPSHOT="pre-clean" rescue_snapshot（仅 profile 存在且有 package.json）
+  # 并校验该快照确实存在；不存在则 WARN + 非零退出 + 不删除任何文件（fail-closed，见 §5 第一层）
+  # 各清理项失败不中断整体，但必须汇总回显给用户
   ;;
 ```
 

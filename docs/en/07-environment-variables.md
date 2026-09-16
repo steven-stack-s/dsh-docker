@@ -70,6 +70,7 @@ system only diagnoses and writes incidents.
 | Variable | Default | Meaning |
 |---|---|---|
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | npm/pnpm registry used inside the container (for initial install, dsh upgrades, pnpm install). Keep the default in CN; switch to `https://registry.npmjs.org` for deployments outside CN. |
+| `NPM_CONFIG_CACHE` | (empty; auto-detected) | npm/pnpm download cache directory inside the container. When empty, the result of `npm config get cache` is used (usually `/root/.npm`). The cleanup command (`rescue clean`) empties the `_cacache` inside it. Point it at a mounted volume if that path is not writable. |
 
 ---
 

@@ -48,6 +48,9 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
       # 国内 npm 加速（可选）：首次安装/升级 DSH、装 pnpm 时走国内镜像源
       - NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}
+      # npm/pnpm 下载缓存目录（可选）：留空则自动探测（npm config get cache，通常 /root/.npm）；
+      # 该路径不可写时可显式指向一个可写目录。rescue clean 会清空其中的 _cacache。
+      - NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:-}
       # ★ 模型 API 密钥（DSH 从环境变量读取，不落盘；换 key 改 .env 重建即可）
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?请在 .env 中设置 DEEPSEEK_API_KEY}
       # ★ /api Host 信任白名单（dsh 0.1.2 起仅信任 loopback 或白名单 Host）：

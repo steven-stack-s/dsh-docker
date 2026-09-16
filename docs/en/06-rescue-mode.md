@@ -93,6 +93,7 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 | `docker exec dsh rescue report --json` | Emit incidents as valid JSON (for scripting) |
 | `docker exec dsh rescue incident list` | List recorded incident ids |
 | `docker exec dsh rescue snapshot --reason '<text>'` | Manual snapshot with trigger context (e.g. `--reason 'plugin add @scope/x'`) for later attribution |
+| `docker exec dsh rescue clean [--yes]` | Clean up leftovers after upgrades (dry-run preview by default; `--yes` applies and snapshots first) |
 
 > After installing/removing/rolling back plugins, run `docker restart dsh` so the entrypoint boots with the new plugin tree; if boot fails, the entrypoint auto-rolls back (see §4).
 

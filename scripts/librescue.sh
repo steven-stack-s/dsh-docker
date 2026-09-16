@@ -604,3 +604,204 @@ rescue_state_read_lastrun() { rescue_json_read "$(state_dir)/last-run.json"; }
 rescue_state_write_selfheal() { rescue_json_write "$(state_dir)/selfheal.json" "$1"; }
 rescue_state_read_selfheal() { rescue_json_read "$(state_dir)/selfheal.json"; }
 
+
+# ---- rescue clean：升级后环境清理（规格 docs/superpowers/specs/2026-09-15-rescue-clean-design.md）----
+# pnpm 虚拟存储目录名 -> "<name>@<version>"。
+# 目录名格式：<name-with-+-for-/>@<version>[_<peerSuffix>]
+# 【必须】先按首个 "_" 切掉 peer 后缀，再取 indexOf("@", 1) 作为 name/version 分隔。
+# 【严禁】用 lastIndexOf("@")：peer 后缀里含 "@"，会把在用的包误判为孤儿并删掉活依赖。
+rescue_pnpm_dir_to_key() {
+  _pk_dir="$1"
+  case "$_pk_dir" in .*) return 1 ;; esac
+  # 先切掉 peer 后缀：目录名中 version 段不含 '_'，首个 '_' 之后即为 peer 信息
+  _pk_core="${_pk_dir%%_*}"
+  [ -n "$_pk_core" ] || return 1
+  # 在剩余部分取「最后一个 @」作为 name/version 边界。
+  # 合法性：name 中的 '/' 已由 pnpm 替换为 '+'，故 core 内至多出现一个 '@'。
+  # 必须用「还原校验」确认切分正确，避免 node_modules / lock.yaml 之类被误判。
+  _pk_head="${_pk_core%@*}"     # name 部分
+  _pk_ver="${_pk_core##*@}"     # version 部分
+  [ -n "$_pk_head" ] || return 1
+  [ "${_pk_head}@${_pk_ver}" = "$_pk_core" ] || return 1
+  # 版本段必须以数字开头（拒绝 lock.yaml / node_modules 之类）
+  case "$_pk_ver" in
+    [0-9]*) : ;;
+    *) return 1 ;;
+  esac
+  printf '%s@%s\n' "$(printf '%s' "$_pk_head" | tr '+' '/')" "$_pk_ver"
+}
+
+# lockfile 的 packages: 段 -> 每行一个 "<name>@<version>"（剥离 'v(...)' peer 括号后缀与引号）
+# 兼容 pnpm v6 风格键：v6 写作 /react@18.2.0、/@scope/name@1.0.0（带前导斜杠）。
+# 必须归一化，否则目录名解析出的 react@18.2.0 与锁文件的 /react@18.2.0 永不相等，
+# 每个条目都会被误判成孤儿 —— 一次 `rescue clean` 就会删光整棵依赖树（Critical）。
+rescue_pnpm_locked_keys() {
+  _lk_file="$1"
+  [ -f "$_lk_file" ] || return 1
+  # 只取 packages: 与 snapshots: 之间的键行（缩进恰为 2 空格且以 ':' 结尾）
+  sed -n '/^packages:[[:space:]]*$/,/^snapshots:[[:space:]]*$/p' "$_lk_file" \
+    | sed -n "s/^  \(.*\):[[:space:]]*$/\1/p" \
+    | sed "s/^'//; s/'$//" \
+    | sed 's/(.*$//' \
+    | sed 's#^/*##'
+}
+
+# 孤儿判定：目录名解析出的键不在 lockfile 引用集内 -> 0（孤儿）；被引用 -> 1
+rescue_pnpm_is_orphan() {
+  _po_dir="$1"; _po_lock="$2"
+  _po_key=$(rescue_pnpm_dir_to_key "$_po_dir") || return 1
+  _po_keys=$(rescue_pnpm_locked_keys "$_po_lock" 2>/dev/null || printf '')
+  # 精确整行相等（-x）且按字面量（-F）：避免前缀/子串导致的漏删。
+  if printf '%s\n' "$_po_keys" | grep -qxF "$_po_key"; then
+    return 1
+  fi
+  return 0
+}
+
+# 目录占用字节数（du -sk 的 POSIX 口径）；不存在或不可读时打印 0。
+rescue_dir_size_bytes() {
+  _ds_p="$1"
+  [ -e "$_ds_p" ] || { printf '0'; return 0; }
+  _ds_k=$(du -sk "$_ds_p" 2>/dev/null | awk '{print $1}' | head -n1)
+  case "$_ds_k" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$((_ds_k * 1024))" ;; esac
+}
+
+# C1：npm 下载缓存。只删 _cacache（纯下载缓存），保留 _logs 等同级内容。
+# 定位顺序：NPM_CONFIG_CACHE / npm_config_cache -> npm config get cache -> /root/.npm
+rescue_clean_npm_cache() {
+  _nc_dry="${1:-1}"
+  _nc_cache="${NPM_CONFIG_CACHE:-${npm_config_cache:-}}"
+  if [ -z "$_nc_cache" ]; then
+    _nc_cache=$(npm config get cache 2>/dev/null || printf '')
+  fi
+  [ -n "$_nc_cache" ] || _nc_cache=/root/.npm
+  _nc_target="$_nc_cache/_cacache"
+  if [ ! -d "$_nc_target" ]; then
+    rescue_log "clean: npm cache absent ($_nc_target)"
+    printf 'npm cache: %s (absent, 0 B)\n' "$_nc_cache"
+    return 0
+  fi
+  _nc_sz=$(rescue_dir_size_bytes "$_nc_target")
+  if [ "$_nc_dry" = 1 ]; then
+    printf 'npm cache: %s (%s B reclaimable)\n' "$_nc_cache" "$_nc_sz"
+    return 0
+  fi
+  rm -rf "$_nc_target" 2>/dev/null || { rescue_log "clean: npm cache removal failed ($_nc_target)"; return 1; }
+  rescue_log "clean: removed npm cache $_nc_target ($_nc_sz B)"
+  printf 'npm cache: %s (%s B reclaimed)\n' "$_nc_cache" "$_nc_sz"
+}
+
+# C2：pnpm 内容寻址存储。官方语义即「只删 unreferenced」，故直接委托 pnpm store prune。
+rescue_clean_pnpm_store() {
+  _ps_dry="${1:-1}"
+  if ! command -v pnpm >/dev/null 2>&1; then
+    rescue_log 'clean: pnpm not found; store prune skipped'
+    printf 'pnpm store: pnpm not found (skipped)\n'
+    return 0
+  fi
+  if [ "$_ps_dry" = 1 ]; then
+    printf 'pnpm store: would run "pnpm store prune" (removes unreferenced packages only)\n'
+    return 0
+  fi
+  _ps_out=$(pnpm store prune 2>&1) || { rescue_log "clean: pnpm store prune failed: $_ps_out"; return 1; }
+  rescue_log "clean: pnpm store prune -> $_ps_out"
+  printf 'pnpm store: %s\n' "$_ps_out"
+}
+
+# == 从 scripts/rescue-supervise.sh 下沉至此的救援历史轮转实现 ==
+# 原因：scripts/rescue（CLI）只 source librescue.sh，定义在 supervise 侧会让
+# `rescue clean` 拿不到它（command not found）。两份实现会漂移，故只保留这一份。
+# evidence 修剪：dsh 日志经 tee 持续镜像到证据目录，按 boot-* 保留最近 RESCUE_KEEP 份，
+# 防长期运行的 dsh.log 镜像无限累积（healthy 后 tee 不再被提前杀死）。
+#
+# 必须按【创建时间】而不是目录名排序：目录名是 boot-<attempt>-<ts>，而 attempt 每次容器重启
+# 都从 1 重新计数，字典序会把重启后第一轮的 boot-1-<新> 排到旧一轮的 boot-2-<旧> 之前当成
+# "最老"删掉 —— 新目录刚建出来就被自己删掉，紧接着 mkfifo 失败、EVLOG 为空，diagnose 拿不到
+# 证据只能 report-only（自愈静默降级，且日志上完全看不出原因）。
+# $1（可选）= 当前这一轮正在使用的目录，永不删除。
+rescue_evidence_prune() {
+  keep="${1:-}"
+  # 证据保留份数可独立配置（P1-9）：此前与快照保留数共用 RESCUE_KEEP，调大快照数会意外多留证据。
+  # 默认沿用 RESCUE_KEEP，保持既有行为。
+  _evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
+  while :; do
+    n=$(ls -1d "$(evidence_dir)"/boot-* 2>/dev/null | wc -l | tr -d ' ')
+    [ "$n" -gt "$_evidence_keep" ] || break
+    oldest=$(ls -1dt "$(evidence_dir)"/boot-* 2>/dev/null | tail -n1)
+    [ -n "$oldest" ] || break
+    if [ -n "$keep" ] && [ "$oldest" = "$keep" ]; then break; fi
+    # 删除失败必须立刻停止：本函数在 PID1 的启动路径上，若循环重试同一个删不掉的目录，
+    # 容器会永远起不来、单核跑满且没有任何日志（评审实测）。
+    rm -rf "$oldest" 2>/dev/null || { rescue_log "evidence prune: rm failed ($oldest), stop pruning"; break; }
+  done
+}
+
+# C3：profile 的 .pnpm 中未被 lockfile 引用的条目。
+# 安全性：只删「当前 lockfile 未引用」的条目。回滚会连同 lockfile 一起还原，
+# 且被删条目在快照里另有独立目录项（cp -al 对目录是新建目录 + 硬链接文件），
+# 故清理不破坏 rescue rollback 基线（规格 §6 已实测）。
+rescue_clean_pnpm_orphans() {
+  _co_pdir="$1"; _co_dry="${2:-1}"
+  _co_pnpm="$_co_pdir/node_modules/.pnpm"
+  _co_lock="$_co_pdir/pnpm-lock.yaml"
+  if [ ! -d "$_co_pnpm" ]; then
+    printf 'pnpm orphans: no virtual store at %s (skipped)\n' "$_co_pnpm"
+    return 0
+  fi
+  if [ ! -f "$_co_lock" ]; then
+    # 无 lockfile 时无法证明谁是可删的 —— 保守起见一律不动（红线）
+    rescue_log "clean: no lockfile at $_co_lock; orphan cleanup skipped"
+    printf 'pnpm orphans: lockfile missing (%s) - skipped for safety\n' "$_co_lock"
+    return 0
+  fi
+  # 键集为空 = 「我无法判断谁有引用」（空/损坏/截断/未知格式的锁文件），
+  # 而不是「我确认这些条目都无引用」—— 后者才可删。
+  # 若不放行这一步，每个条目都会被判为孤儿，一次 clean 就删光整棵依赖树（Critical）。
+  # 只在此处判定一次，不要在循环里逐条目重算。
+  _co_keys=$(rescue_pnpm_locked_keys "$_co_lock" 2>/dev/null || printf '')
+  if [ -z "$_co_keys" ]; then
+    rescue_log "clean: lockfile yielded no keys ($_co_lock); orphan cleanup skipped"
+    printf 'pnpm orphans: lockfile yielded no keys - skipped for safety\n'
+    return 0
+  fi
+  _co_n=0; _co_sz=0
+  for _co_d in "$_co_pnpm"/*; do
+    [ -d "$_co_d" ] || continue
+    _co_name=${_co_d##*/}
+    rescue_pnpm_is_orphan "$_co_name" "$_co_lock" || continue
+    _co_b=$(rescue_dir_size_bytes "$_co_d")
+    _co_n=$((_co_n + 1))
+    _co_sz=$((_co_sz + _co_b))
+    if [ "$_co_dry" = 1 ]; then
+      printf 'pnpm orphan: %s (%s B)\n' "$_co_name" "$_co_b"
+    elif rm -rf "$_co_d" 2>/dev/null; then
+      rescue_log "clean: removed pnpm orphan $_co_name ($_co_b B)"
+      printf 'pnpm orphan: %s removed (%s B)\n' "$_co_name" "$_co_b"
+    else
+      # 删除失败：只记失败，绝不打印/记录 removed（避免假成功日志）
+      rescue_log "clean: failed to remove orphan $_co_name"
+      printf 'pnpm orphan: %s removal FAILED (%s B)\n' "$_co_name" "$_co_b"
+    fi
+  done
+  if [ "$_co_n" = 0 ]; then
+    printf 'pnpm orphans: none (%s)\n' "$_co_pnpm"
+  else
+    printf 'pnpm orphans: %s entr%s, %s B\n' "$_co_n" "$([ "$_co_n" = 1 ] && printf y || printf ies)" "$_co_sz"
+  fi
+}
+
+# C4：显式触发既有轮转（不新写轮转逻辑）
+# 输出必须与事实一致：两个 prune 都失败时不得打印成功、不得宣称已轮转。
+rescue_clean_rescue_history() {
+  _ch_ev=0; _ch_in=0
+  rescue_evidence_prune 2>/dev/null || _ch_ev=1
+  rescue_incident_prune 2>/dev/null || _ch_in=1
+  if [ "$_ch_ev" = 0 ] && [ "$_ch_in" = 0 ]; then
+    rescue_log 'clean: rescue history pruned (evidence + incidents)'
+    printf 'rescue history: evidence + incidents pruned\n'
+    return 0
+  fi
+  rescue_log "clean: rescue history prune incomplete (evidence rc=$_ch_ev, incidents rc=$_ch_in)"
+  printf 'rescue history: prune incomplete (evidence rc=%s, incidents rc=%s)\n' "$_ch_ev" "$_ch_in"
+  return 1
+}

@@ -80,30 +80,9 @@ rescue_close_ev() {
   fi
   tee_pid=''
 }
-# evidence 修剪：dsh 日志经 tee 持续镜像到证据目录，按 boot-* 保留最近 RESCUE_KEEP 份，
-# 防长期运行的 dsh.log 镜像无限累积（healthy 后 tee 不再被提前杀死）。
-#
-# 必须按【创建时间】而不是目录名排序：目录名是 boot-<attempt>-<ts>，而 attempt 每次容器重启
-# 都从 1 重新计数，字典序会把重启后第一轮的 boot-1-<新> 排到旧一轮的 boot-2-<旧> 之前当成
-# "最老"删掉 —— 新目录刚建出来就被自己删掉，紧接着 mkfifo 失败、EVLOG 为空，diagnose 拿不到
-# 证据只能 report-only（自愈静默降级，且日志上完全看不出原因）。
-# $1（可选）= 当前这一轮正在使用的目录，永不删除。
-rescue_evidence_prune() {
-  keep="${1:-}"
-  # 证据保留份数可独立配置（P1-9）：此前与快照保留数共用 RESCUE_KEEP，调大快照数会意外多留证据。
-  # 默认沿用 RESCUE_KEEP，保持既有行为。
-  _evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
-  while :; do
-    n=$(ls -1d "$(evidence_dir)"/boot-* 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -gt "$_evidence_keep" ] || break
-    oldest=$(ls -1dt "$(evidence_dir)"/boot-* 2>/dev/null | tail -n1)
-    [ -n "$oldest" ] || break
-    if [ -n "$keep" ] && [ "$oldest" = "$keep" ]; then break; fi
-    # 删除失败必须立刻停止：本函数在 PID1 的启动路径上，若循环重试同一个删不掉的目录，
-    # 容器会永远起不来、单核跑满且没有任何日志（评审实测）。
-    rm -rf "$oldest" 2>/dev/null || { rescue_log "evidence prune: rm failed ($oldest), stop pruning"; break; }
-  done
-}
+# rescue_evidence_prune 已下沉到 librescue.sh：scripts/rescue 只 source librescue，
+# 定义在 supervise 侧会让 `rescue clean` 拿不到它（command not found）。
+# 关键取值：_evidence_keep="${RESCUE_EVIDENCE_KEEP:-$RESCUE_KEEP}"
 # 健康基线快照（v0.3.5）：boot 确认健康后拍一份「已被证明能启动」的基线，
 # 为绕过 rescue 封装的变更（插件市场 dshmarket 在 dsh 进程内直接改 profile 的
 # package.json/node_modules）提供回退点——变更前的状态只能由变更前已存在的快照提供。
