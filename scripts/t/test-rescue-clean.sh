@@ -186,6 +186,10 @@ EOF
 before_pkg=$(cksum < "$P/package.json")
 before_lock=$(cksum < "$P/pnpm-lock.yaml")
 
+# 前置存在性断言：函数不存在时必须立刻失败，
+# 否则下面的「目录还在」断言会因「没人删东西」而空洞通过（评审者变异测试证明）。
+command -v rescue_clean_pnpm_orphans >/dev/null 2>&1 || fail 'function-missing:rescue_clean_pnpm_orphans'
+
 # dry-run：不删任何东西
 rescue_clean_pnpm_orphans "$P" 1 >/dev/null 2>&1 || true
 [ -d "$P/node_modules/.pnpm/@wenaixi+dsh-superpower@6.3.1_peer_aa" ] || fail 'dryrun-deleted-orphan'
@@ -203,5 +207,55 @@ rescue_clean_pnpm_orphans "$P" 0 >/dev/null 2>&1 || true
 command -v rescue_evidence_prune >/dev/null 2>&1 || fail 'evidence-prune-not-visible-in-librescue'
 command -v rescue_incident_prune >/dev/null 2>&1 || fail 'incident-prune-not-visible-in-librescue'
 rescue_clean_rescue_history >/dev/null 2>&1 || fail 'rescue-history-clean-failed'
+
+# --- 9) 锁文件格式不匹配 / 解析不出键时，必须保守跳过（Critical 红线）---
+# 设计原则：区分「我确认这些条目无引用」与「我无法判断谁有引用」。
+# 前者才可删；后者必须原样保留整棵树。
+command -v rescue_clean_pnpm_orphans >/dev/null 2>&1 || fail 'function-missing:rescue_clean_pnpm_orphans'
+
+# 9a) pnpm v6 风格锁文件：键形如 /react@18.2.0（带前导斜杠）
+G="$T/guard"; PG="$G/profiles/web"
+mkdir -p "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp" "$PG/node_modules/.pnpm/react@18.2.0_aa"
+printf 'a' > "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp/f"
+printf 'b' > "$PG/node_modules/.pnpm/react@18.2.0_aa/f"
+printf '%s' '{"name":"web"}' > "$PG/package.json"
+cat > "$PG/pnpm-lock.yaml" <<'EOF'
+lockfileVersion: 6.0
+
+packages:
+
+  /@scope/name@1.0.0:
+    resolution: {integrity: sha512-aaa}
+
+  /react@18.2.0:
+    resolution: {integrity: sha512-bbb}
+EOF
+# 归一化契约：v6 键必须被剥掉前导斜杠
+kk=$(rescue_pnpm_locked_keys "$PG/pnpm-lock.yaml")
+printf '%s\n' "$kk" | grep -qxF '/react@18.2.0' && fail 'v6-key-leading-slash-not-normalized'
+printf '%s\n' "$kk" | grep -qxF 'react@18.2.0' || fail 'v6-key-missing-after-normalize'
+printf '%s\n' "$kk" | grep -qxF '@scope/name@1.0.0' || fail 'v6-scoped-key-not-normalized'
+
+rescue_clean_pnpm_orphans "$PG" 0 >/dev/null 2>&1 || true
+[ -d "$PG/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-v6-lockfile-wiped-referenced-entry'
+[ -d "$PG/node_modules/.pnpm/@scope+name@1.0.0_pp" ] || fail 'CRITICAL-v6-lockfile-wiped-scoped-entry'
+
+# 9b) 0 字节锁文件 → 解析不出任何键 → 必须整棵保留
+G2="$T/guard-empty"; PG2="$G2/profiles/web"
+mkdir -p "$PG2/node_modules/.pnpm/react@18.2.0_aa"
+printf 'b' > "$PG2/node_modules/.pnpm/react@18.2.0_aa/f"
+printf '%s' '{"name":"web"}' > "$PG2/package.json"
+: > "$PG2/pnpm-lock.yaml"
+rescue_clean_pnpm_orphans "$PG2" 0 >/dev/null 2>&1 || true
+[ -d "$PG2/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-empty-lockfile-wiped-tree'
+
+# 9c) 缺 snapshots: 段（截断/损坏）→ 解析不出键 → 必须整棵保留
+G3="$T/guard-trunc"; PG3="$G3/profiles/web"
+mkdir -p "$PG3/node_modules/.pnpm/react@18.2.0_aa"
+printf 'b' > "$PG3/node_modules/.pnpm/react@18.2.0_aa/f"
+printf '%s' '{"name":"web"}' > "$PG3/package.json"
+printf 'lockfileVersion: 9.0\n' > "$PG3/pnpm-lock.yaml"
+rescue_clean_pnpm_orphans "$PG3" 0 >/dev/null 2>&1 || true
+[ -d "$PG3/node_modules/.pnpm/react@18.2.0_aa" ] || fail 'CRITICAL-truncated-lockfile-wiped-tree'
 
 echo 'ALL-PASS'

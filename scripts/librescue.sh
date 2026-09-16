@@ -632,6 +632,9 @@ rescue_pnpm_dir_to_key() {
 }
 
 # lockfile 的 packages: 段 -> 每行一个 "<name>@<version>"（剥离 'v(...)' peer 括号后缀与引号）
+# 兼容 pnpm v6 风格键：v6 写作 /react@18.2.0、/@scope/name@1.0.0（带前导斜杠）。
+# 必须归一化，否则目录名解析出的 react@18.2.0 与锁文件的 /react@18.2.0 永不相等，
+# 每个条目都会被误判成孤儿 —— 一次 `rescue clean` 就会删光整棵依赖树（Critical）。
 rescue_pnpm_locked_keys() {
   _lk_file="$1"
   [ -f "$_lk_file" ] || return 1
@@ -639,7 +642,8 @@ rescue_pnpm_locked_keys() {
   sed -n '/^packages:[[:space:]]*$/,/^snapshots:[[:space:]]*$/p' "$_lk_file" \
     | sed -n "s/^  \(.*\):[[:space:]]*$/\1/p" \
     | sed "s/^'//; s/'$//" \
-    | sed 's/(.*$//'
+    | sed 's/(.*$//' \
+    | sed 's#^/*##'
 }
 
 # 孤儿判定：目录名解析出的键不在 lockfile 引用集内 -> 0（孤儿）；被引用 -> 1
@@ -750,6 +754,16 @@ rescue_clean_pnpm_orphans() {
     printf 'pnpm orphans: lockfile missing (%s) - skipped for safety\n' "$_co_lock"
     return 0
   fi
+  # 键集为空 = 「我无法判断谁有引用」（空/损坏/截断/未知格式的锁文件），
+  # 而不是「我确认这些条目都无引用」—— 后者才可删。
+  # 若不放行这一步，每个条目都会被判为孤儿，一次 clean 就删光整棵依赖树（Critical）。
+  # 只在此处判定一次，不要在循环里逐条目重算。
+  _co_keys=$(rescue_pnpm_locked_keys "$_co_lock" 2>/dev/null || printf '')
+  if [ -z "$_co_keys" ]; then
+    rescue_log "clean: lockfile yielded no keys ($_co_lock); orphan cleanup skipped"
+    printf 'pnpm orphans: lockfile yielded no keys - skipped for safety\n'
+    return 0
+  fi
   _co_n=0; _co_sz=0
   for _co_d in "$_co_pnpm"/*; do
     [ -d "$_co_d" ] || continue
@@ -760,10 +774,13 @@ rescue_clean_pnpm_orphans() {
     _co_sz=$((_co_sz + _co_b))
     if [ "$_co_dry" = 1 ]; then
       printf 'pnpm orphan: %s (%s B)\n' "$_co_name" "$_co_b"
-    else
-      rm -rf "$_co_d" 2>/dev/null || rescue_log "clean: failed to remove orphan $_co_name"
+    elif rm -rf "$_co_d" 2>/dev/null; then
       rescue_log "clean: removed pnpm orphan $_co_name ($_co_b B)"
       printf 'pnpm orphan: %s removed (%s B)\n' "$_co_name" "$_co_b"
+    else
+      # 删除失败：只记失败，绝不打印/记录 removed（避免假成功日志）
+      rescue_log "clean: failed to remove orphan $_co_name"
+      printf 'pnpm orphan: %s removal FAILED (%s B)\n' "$_co_name" "$_co_b"
     fi
   done
   if [ "$_co_n" = 0 ]; then
@@ -774,9 +791,17 @@ rescue_clean_pnpm_orphans() {
 }
 
 # C4：显式触发既有轮转（不新写轮转逻辑）
+# 输出必须与事实一致：两个 prune 都失败时不得打印成功、不得宣称已轮转。
 rescue_clean_rescue_history() {
-  rescue_evidence_prune 2>/dev/null || true
-  rescue_incident_prune 2>/dev/null || true
-  rescue_log 'clean: rescue history pruned (evidence + incidents)'
-  printf 'rescue history: evidence + incidents pruned\n'
+  _ch_ev=0; _ch_in=0
+  rescue_evidence_prune 2>/dev/null || _ch_ev=1
+  rescue_incident_prune 2>/dev/null || _ch_in=1
+  if [ "$_ch_ev" = 0 ] && [ "$_ch_in" = 0 ]; then
+    rescue_log 'clean: rescue history pruned (evidence + incidents)'
+    printf 'rescue history: evidence + incidents pruned\n'
+    return 0
+  fi
+  rescue_log "clean: rescue history prune incomplete (evidence rc=$_ch_ev, incidents rc=$_ch_in)"
+  printf 'rescue history: prune incomplete (evidence rc=%s, incidents rc=%s)\n' "$_ch_ev" "$_ch_in"
+  return 1
 }
