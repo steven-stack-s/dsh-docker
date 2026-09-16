@@ -604,3 +604,55 @@ rescue_state_read_lastrun() { rescue_json_read "$(state_dir)/last-run.json"; }
 rescue_state_write_selfheal() { rescue_json_write "$(state_dir)/selfheal.json" "$1"; }
 rescue_state_read_selfheal() { rescue_json_read "$(state_dir)/selfheal.json"; }
 
+
+# ---- rescue clean：升级后环境清理（规格 docs/superpowers/specs/2026-09-15-rescue-clean-design.md）----
+# pnpm 虚拟存储目录名 -> "<name>@<version>"。
+# 目录名格式：<name-with-+-for-/>@<version>[_<peerSuffix>]
+# 【必须】先按首个 "_" 切掉 peer 后缀，再取 indexOf("@", 1) 作为 name/version 分隔。
+# 【严禁】用 lastIndexOf("@")：peer 后缀里含 "@"，会把在用的包误判为孤儿并删掉活依赖。
+rescue_pnpm_dir_to_key() {
+  _pk_dir="$1"
+  case "$_pk_dir" in .*) return 1 ;; esac
+  # 先切掉 peer 后缀：目录名中 version 段不含 '_'，首个 '_' 之后即为 peer 信息
+  _pk_core="${_pk_dir%%_*}"
+  [ -n "$_pk_core" ] || return 1
+  # 在剩余部分取「最后一个 @」作为 name/version 边界。
+  # 合法性：name 中的 '/' 已由 pnpm 替换为 '+'，故 core 内至多出现一个 '@'。
+  # 必须用「还原校验」确认切分正确，避免 node_modules / lock.yaml 之类被误判。
+  _pk_head="${_pk_core%@*}"     # name 部分
+  _pk_ver="${_pk_core##*@}"     # version 部分
+  [ -n "$_pk_head" ] || return 1
+  [ "${_pk_head}@${_pk_ver}" = "$_pk_core" ] || return 1
+  # 版本段必须以数字开头（拒绝 lock.yaml / node_modules 之类）
+  case "$_pk_ver" in
+    [0-9]*) : ;;
+    *) return 1 ;;
+  esac
+  printf '%s@%s\n' "$(printf '%s' "$_pk_head" | tr '+' '/')" "$_pk_ver"
+}
+
+# lockfile 的 packages: 段 -> 每行一个 "<name>@<version>"（剥离 'v(...)' peer 括号后缀与引号）
+rescue_pnpm_locked_keys() {
+  _lk_file="$1"
+  [ -f "$_lk_file" ] || return 1
+  # 只取 packages: 与 snapshots: 之间的键行（缩进恰为 2 空格且以 ':' 结尾）
+  sed -n '/^packages:[[:space:]]*$/,/^snapshots:[[:space:]]*$/p' "$_lk_file" \
+    | sed -n "s/^  \(.*\):[[:space:]]*$/\1/p" \
+    | sed "s/^'//; s/'$//" \
+    | sed 's/(.*$//'
+}
+
+# 孤儿判定：目录名解析出的键不在 lockfile 引用集内 -> 0（孤儿）；被引用 -> 1
+rescue_pnpm_is_orphan() {
+  _po_dir="$1"; _po_lock="$2"
+  _po_key=$(rescue_pnpm_dir_to_key "$_po_dir") || return 1
+  _po_keys=$(rescue_pnpm_locked_keys "$_po_lock" 2>/dev/null || printf '')
+  case "
+$_po_keys
+" in
+    *"
+$_po_key
+"*) return 1 ;;
+  esac
+  return 0
+}
