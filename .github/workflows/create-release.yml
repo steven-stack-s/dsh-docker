@@ -83,3 +83,24 @@ jobs:
           done
           echo "==== 完成：新建 $created 个，更新 $updated 个 ===="
           echo "查看：https://github.com/steven-stack-s/dsh-docker/releases"
+      # 诊断：CI 日志需管理员权限，改把本次运行的候选与结果推到 ci-diag 分支（可直接 fetch）。
+      # 定位完成后移除。
+      - name: Publish run report to ci-diag branch
+        run: |
+          set -e
+          git config user.name "ci-diag"
+          git config user.email "ci-diag@users.noreply.github.com"
+          git checkout -B ci-diag-tmp >/dev/null 2>&1
+          {
+            echo "candidates_count: $(git tag -l | wc -l)"
+            echo "has_v0.4.3_tag: $(git tag -l | grep -c "v0.4.3-dsh-0.1.5-rc.2" || true)"
+            echo "--- all tags ---"
+            git tag -l --sort=v:refname
+            echo "--- refs/tags/v0.4.3 verify ---"
+            git rev-parse -q --verify "refs/tags/v0.4.3-dsh-0.1.5-rc.2" || echo "(verify FAILED)"
+            echo "--- changelog section for v0.4.3 ---"
+            grep -c "## \[v0.4.3-dsh-0.1.5-rc.2\]" CHANGELOG.md || true
+          } > CI-DIAG.txt 2>&1
+          git add -f CI-DIAG.txt
+          git commit -m "ci-diag: create-release run report" >/dev/null
+          git push -f origin HEAD:refs/heads/ci-diag
