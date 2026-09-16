@@ -683,7 +683,7 @@ rescue_clean_npm_cache() {
     return 0
   fi
   rm -rf "$_nc_target" 2>/dev/null || { rescue_log "clean: npm cache removal failed ($_nc_target)"; return 1; }
-  rescue_log "clean: removed npm cache $_nc_target (%s B)" "$_nc_sz"
+  rescue_log "clean: removed npm cache $_nc_target ($_nc_sz B)"
   printf 'npm cache: %s (%s B reclaimed)\n' "$_nc_cache" "$_nc_sz"
 }
 
