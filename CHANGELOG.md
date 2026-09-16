@@ -4,7 +4,11 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
+
+> 跟进 `rescue clean` 功能落地（任务 1-7 + 最终广度评审）。镜像 seed 锁定的 DSH 版本
+> 仍为 `0.1.6-alpha.1`（与 v0.4.4 相同），**部署/升级/entrypoint 链路本身未做改动**；
+> 本版本的核心增量是新增了清理命令 `rescue clean` 及其相关环境变量。
 
 ### Added
 - `rescue clean`：升级后环境清理。默认 dry-run 预览，`--yes` 执行前自动拍 pre-clean 快照。
@@ -22,6 +26,8 @@
   以非零退出且不删除任何文件**（fail-closed）。
 - `rescue clean` 的清理项失败不再静默：`npm-cache` / `pnpm-store` / `pnpm-orphans` /
   `rescue-history` 中任一项失败都会在 CLI 侧汇总回显（保留「不中断整体流程」的容错语义）。
+
+## [Unreleased]
 
 ## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 
