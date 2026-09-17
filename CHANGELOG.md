@@ -4,30 +4,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
+## [v0.4.6-dsh-0.1.6-alpha.1] - 2026-09-17
 
-> 跟进 `rescue clean` 功能落地（任务 1-7 + 最终广度评审）。镜像 seed 锁定的 DSH 版本
-> 仍为 `0.1.6-alpha.1`（与 v0.4.4 相同），**部署/升级/entrypoint 链路本身未做改动**；
-> 本版本的核心增量是新增了清理命令 `rescue clean` 及其相关环境变量。
-
-### Added
-- `rescue clean`：升级后环境清理。默认 dry-run 预览，`--yes` 执行前自动拍 pre-clean 快照。
-  清理 npm 缓存、pnpm store 孤儿、profile `.pnpm` 中未被 lockfile 引用的条目与超限救援历史；
-  不触碰依赖基线与快照，不影响 `rescue rollback`。
-- 新环境变量 `NPM_CONFIG_CACHE`：容器内 npm / pnpm 的下载缓存目录。留空时自动探测
-  （`npm config get cache`，通常为 `/root/.npm`）；该路径不可写时可指向挂载的卷。
-  `rescue clean` 会清空其中的 `_cacache`。（`docker-compose.yml` 与 07 环境变量速查表已登记。）
-
-### Fixed
-- `rescue clean --yes` 的 pre-clean 快照护栏现在会**校验快照确实存在**后再执行删除。
-  此前 `rescue_snapshot` 尾部的轮转会与既有快照竞争同一个 `RESCUE_KEEP` 窗口：窗口已满
-  （尤其被 pinned 的 `boot-healthy` 占满）时，刚拍的 pre-clean 快照会被自己淘汰，而 CLI 仍
-  打印「snapshot created」并以 0 退出 —— 用户被告知有回退点、实际没有。现在该场景会**告警、
-  以非零退出且不删除任何文件**（fail-closed）。
-- `rescue clean` 的清理项失败不再静默：`npm-cache` / `pnpm-store` / `pnpm-orphans` /
-  `rescue-history` 中任一项失败都会在 CLI 侧汇总回显（保留「不中断整体流程」的容错语义）。
-
-## [Unreleased]
+> 跟随**容器安全加固**落地（非 root 运行 + capability/只读硬化）。镜像 seed 锁定的 DSH 版本
+> 仍为 `0.1.6-alpha.1`（与 v0.4.5 相同），**部署/升级/entrypoint 安全模型做了实质改动**：容器由
+> root 改为非 root（uid 1000）运行、`cap_drop`+`read_only` 收紧；同时修正
+> `DSH_TRUSTED_HOSTS` 与 dsh-remote 关系的文档口径（装认证插件后无需白名单）。
 
 ### Added
 - **容器安全加固：改为非 root 运行 + 收紧 capability/只读**（在 v0.4.5 之上的部署硬化）。
@@ -40,7 +22,7 @@
   - **capability 收敛**：`docker-compose.yml` 启用 `cap_drop: [ALL]` + 最小白名单
     `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`（仅供首启 chown 挂载卷与 setpriv 降权）。
   - **只读根 FS**：`read_only: true` + `tmpfs /tmp`（128m）。根 FS 只读后，`NPM_CONFIG_CACHE`
-    由 entrypoint 默认兜底到可写卷 `$PROGRAMS_DIR/.npm-cache`（`_cacache` 清理仍命中）。
+    由 entrypoint 默认兜底到可写卷 `/opt/dsh/.npm-cache`（`_cacache` 清理仍命中）。
   - **web profile 固化为 `patchReload: startup`（关闭 HMR）**：`web` 是 dsh 唯一默认
     `patchReload:"live"`（改 cordis.patch.yml 即时热重载）的 profile；但其 HMR 依赖的 native
     addon（`node-addon-require-builtin`）在 `read_only` 根 FS 下无可用 binding，启动即抛
@@ -67,6 +49,31 @@
   `.env.example` 与 `docker-compose.yml` 的注释（"必填"改为"未装 dsh-remote 时必填"）、
   docs 01/02/04/05（中英同步，02 的"⚠ 必须把域名加进白名单"改为"ℹ 装 dsh-remote 时
   不需要"）。部署逻辑本身无改动。
+
+## [Unreleased]
+
+## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
+
+> 跟进 `rescue clean` 功能落地（任务 1-7 + 最终广度评审）。镜像 seed 锁定的 DSH 版本
+> 仍为 `0.1.6-alpha.1`（与 v0.4.4 相同），**部署/升级/entrypoint 链路本身未做改动**；
+> 本版本的核心增量是新增了清理命令 `rescue clean` 及其相关环境变量。
+
+### Added
+- `rescue clean`：升级后环境清理。默认 dry-run 预览，`--yes` 执行前自动拍 pre-clean 快照。
+  清理 npm 缓存、pnpm store 孤儿、profile `.pnpm` 中未被 lockfile 引用的条目与超限救援历史；
+  不触碰依赖基线与快照，不影响 `rescue rollback`。
+- 新环境变量 `NPM_CONFIG_CACHE`：容器内 npm / pnpm 的下载缓存目录。留空时自动探测
+  （`npm config get cache`，通常为 `/root/.npm`）；该路径不可写时可指向挂载的卷。
+  `rescue clean` 会清空其中的 `_cacache`。（`docker-compose.yml` 与 07 环境变量速查表已登记。）
+
+### Fixed
+- `rescue clean --yes` 的 pre-clean 快照护栏现在会**校验快照确实存在**后再执行删除。
+  此前 `rescue_snapshot` 尾部的轮转会与既有快照竞争同一个 `RESCUE_KEEP` 窗口：窗口已满
+  （尤其被 pinned 的 `boot-healthy` 占满）时，刚拍的 pre-clean 快照会被自己淘汰，而 CLI 仍
+  打印「snapshot created」并以 0 退出 —— 用户被告知有回退点、实际没有。现在该场景会**告警、
+  以非零退出且不删除任何文件**（fail-closed）。
+- `rescue clean` 的清理项失败不再静默：`npm-cache` / `pnpm-store` / `pnpm-orphans` /
+  `rescue-history` 中任一项失败都会在 CLI 侧汇总回显（保留「不中断整体流程」的容错语义）。
 
 ## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 
