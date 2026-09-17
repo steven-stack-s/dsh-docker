@@ -114,10 +114,24 @@ rescue_snapshot() {
     if [ "$snap_mode" = copy ]; then
       cp -a "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules" 2>/dev/null \
         || rescue_log "snapshot: cp -a failed ($snap)"
-    elif ! cp -al "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules" 2>/dev/null; then
-      rescue_log "snapshot: cp -al failed -> cp -a"
-      cp -a "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules" 2>/dev/null \
-        || rescue_log "snapshot: cp -a failed ($snap)"
+    else
+      # cp -al 的 stderr 过去被丢弃，失败时只留一句"cp -al failed"，真因（EXDEV /
+      # EACCES / 配额…）无从得知（真机排查时正是卡在这一步）。落盘到 .rescue 下的
+      # 临时文件，只把前两行写进日志，然后清理。
+      _cpal_err="$RESCUE_DIR/.cp-al-$$.err"
+      if cp -al "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules" 2>"$_cpal_err"; then
+        rm -f "$_cpal_err"
+      else
+        rescue_log "snapshot: cp -al failed -> cp -a :: $(head -n2 "$_cpal_err" 2>/dev/null | tr '\n' '|')"
+        rm -f "$_cpal_err"
+        # 关键修复：cp -al 失败会在目标留下【部分创建的目录树】，此处若不清理就回退，
+        # `cp -a SRC DST`（DST 已存在）会把 SRC 拷【进】DST，产出
+        # node_modules/node_modules 嵌套 —— 真机实测每次都多占约 900MB，且快照结构不干净。
+        # （下方 .dsh-module-fallback 分支本就带这步 rm -rf，此处补齐，两者语义一致。）
+        rm -rf "$RESCUE_DIR/$snap/node_modules"
+        cp -a "$pdir/node_modules" "$RESCUE_DIR/$snap/node_modules" 2>/dev/null \
+          || rescue_log "snapshot: cp -a failed ($snap)"
+      fi
     fi
   fi
   # DSH 的 bundle 包解析会在 profile 下建 .dsh-module-fallback/node_modules，node_modules 里

@@ -62,15 +62,22 @@
   `scripts/t/*.sh` 必须可执行，检出后即失败（本地因工作区恰好可执行而漏过）。已用
   `git update-index --chmod=+x` 修正为 `100755`。
 
-## [Unreleased]
+## [v0.4.7-dsh-0.1.6-alpha.1] - 2026-09-17
+
+> 跟随 **v0.4.6 真机上线暴露的三个问题**修复（同一个 NAS 实例连续踩到）。
+> 镜像 seed 锁定的 DSH 版本仍为 `0.1.6-alpha.1`；本版**不改部署模型**，只把
+> 「非 root 迁移」与「tmpfs noexec」两类真实故障在镜像层兜住，使升级不再需要人工
+> 改 compose 或手工 chmod。
 
 ### Fixed
-- **非 root 启动的第二个坑：属主无读权限的历史文件（真机故障修复 2026-09-17）**。
-  `chown -R` 只改属主、**不改权限位**。真机 `/data/dsh` 下有 104 个模式为 `0000` 的
+- **非 root 启动的第二个坑：属主无读权限的历史文件**。
+  `chown` 只改属主、**不改权限位**。真机 `/data/dsh` 下有 104 个模式为 `0000` 的
   文件（`sessions/--*--/session.jsonl.zstd`、`storages/session_projcache/sessions/*.json`，
   全部来自 09-07~09-10），连属主自己都读不了：以 root 运行时被 `CAP_DAC_OVERRIDE` 掩盖，
-  降权到 uid 1000 后 dsh 打开它们即 `EACCES` → 插件树加载失败 → 启动失败 → 自愈耗尽 → lifeboat。
-  entrypoint 的 root 首启块现在会在 chown 之后补一遍**属主可读性归一**
+  降权到 uid 1000 后 dsh 打开它们即 `EACCES` → 插件树加载失败 → 启动失败 → 自愈耗尽 → lifeboat
+  （`@deepseek-ai/dsh-workspace` 属核心 bundle，**web 与 lifeboat 都会加载它，故两者一起死**，
+  表现成"连救生舱都进不去"的无限重启）。
+  entrypoint 的 root 首启块现在会在属主整备之后补一遍**属主可读性归一**
   （`find <vol> -not -perm -u+r -exec chmod u+rwX {} +`，只碰无 u+r 的条目，
   `X` 仅对目录/已可执行文件加 x）。失败只告警、绝不阻断启动。
 - **镜像层兜底：原生插件绑定缓存不再依赖 `/tmp` 可执行**。v0.4.6 已在 compose 里给
@@ -79,6 +86,21 @@
   第三方插件全部 `ERR_MODULE_NOT_FOUND`。现于 `Dockerfile` 设
   `ENV NARB_DISABLE_NATIVE_CACHE=1`：绑定改从 `/opt/dsh`（挂载卷，可执行）原路径加载，
   既不依赖 `/tmp` 可执行、也不额外写盘。`test-compose-wiring.sh` 增加对应门禁。
+- **rescue 快照 hardlink 失败的回退会产出 `node_modules/node_modules` 嵌套**。
+  `cp -al` 失败时会在目标留下**部分创建的目录树**；原代码未清理就回退 `cp -a SRC DST`，
+  而 DST 已存在 → cp 把 SRC 拷**进** DST，产出嵌套目录。真机实测每份快照因此多占约 900MB
+  （`snap-0060`/`snap-0061` 各 1.8G，而正常应为 904M）。现回退前先 `rm -rf` 残留，
+  与 `.dsh-module-fallback` 分支语义一致；同时把 `cp -al` 的 stderr 前两行写进 rescue.log
+  （此前被丢弃，真机排查时无法得知是 EXDEV / EACCES / 配额）。
+
+### Changed
+- **启动时的卷属主整备不再全量 `chown -R`**。真机三卷合计约 **28.8 万个文件**
+  （`/data/dsh` 21.7 万），而 `chown -R` 会对**每个 inode 都发起一次写**——NAS 上每次启动
+  成本很高，且绝大多数文件本来就已归运行用户。改为
+  `find <vol> \( -not -user U -o -not -group G \) -exec chown U:G {} +`：
+  语义等价（该改的一个不漏），已正确的条目只被 stat、不产生写。
+
+## [Unreleased]
 
 ## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
 

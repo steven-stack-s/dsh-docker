@@ -61,6 +61,12 @@ grep -qE 's/"patchReload".*"live".*"startup"' "$ENTRY" || fail entrypoint-missin
 # 属主可读性归一：chown 只改属主不改权限位，历史 0000 文件会让非 root 启动 EACCES
 grep -q -- '-not -perm -u+r' "$ENTRY" || fail entrypoint-missing-perm-normalization
 grep -q 'chmod u+rwX' "$ENTRY" || fail entrypoint-missing-perm-chmod
+# 属主整备必须是"只改不符的条目"，不得退回对挂载卷全量 chown -R
+# （28.8 万 inode 每次全量写；其它小目录的 chown -R 仍属正常，不做一刀切）
+grep -q -- '-not -user' "$ENTRY" || fail entrypoint-missing-targeted-chown
+if grep -qF 'chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$v"' "$ENTRY"; then
+  fail entrypoint-regressed-to-recursive-volume-chown
+fi
 
 # ---- 3) Dockerfile：声明非 root 运行用户（复用镜像自带 node 用户 uid=1000），
 #        且没有直接 `USER 1000` 收尾（应保留 root 启动，由 entrypoint 降权后再进运行流程）。

@@ -76,15 +76,19 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
     fi
   fi
 
-  # ③ 挂载卷属主整备：把三个持久化卷 chown 给运行用户（bridge 了宿主机目录属主差异）
+  # ③ 挂载卷属主整备：把三个持久化卷对齐给运行用户（bridge 了宿主机目录属主差异）
   #    非 root 后 dsh/npm/rescue 都要在卷上读写，属主必须归 dsh。
-  #    chown 失败不致命（只告警后继续，属主不符可能导致运行期写失败）。宿主机目录
-  #    若原本已归目标用户（多数 NAS 首用户即 1000），chown 是 no-op。
-  elog "[entrypoint]   fixing ownership of mounted volumes to $RUN_USER_ID:$RUN_GROUP_ID"
+  #    【为何不用 `chown -R`】真机三卷合计约 28.8 万个文件（/data/dsh 21.7 万）。`chown -R`
+  #    会对**每个 inode 都发起一次写**，NAS 上每次启动要跑很久；而这些文件绝大多数本来就
+  #    已经是运行用户所有，是纯粹的重复写。改为只对"属主/属组不符"的条目 chown：
+  #    语义完全等价（错的一个不漏），但已正确的条目只被 stat 一次、不产生写。
+  #    失败不致命（只告警后继续，属主不符可能导致运行期写失败）。
+  elog "[entrypoint]   aligning mounted-volume ownership to $RUN_USER_ID:$RUN_GROUP_ID (only entries that differ)"
   for v in /opt/dsh /data/dsh /workspace; do
     mkdir -p "$v"
-    chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$v" \
-      || elog "[entrypoint]   WARN chown $v failed (volume may be read-only/root-owned)"
+    find "$v" \( -not -user "$RUN_USER_ID" -o -not -group "$RUN_GROUP_ID" \) \
+      -exec chown "$RUN_USER_ID:$RUN_GROUP_ID" {} + 2>/dev/null \
+      || elog "[entrypoint]   WARN ownership alignment incomplete for $v (volume may be read-only/foreign-owned)"
   done
 
   # ③b 属主可读性归一（真机故障修复 2026-09-17）。
@@ -92,9 +96,9 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
   #     属主自己也读不了。以 root 运行时被 CAP_DAC_OVERRIDE 掩盖，一旦降权到 uid 1000，
   #     dsh 打开会话/缓存文件就 EACCES → 插件树加载失败 → 启动失败 → 自愈耗尽 → 进 lifeboat。
   #     真机实例 /data/dsh 下有 104 个此类文件（sessions/--*--/session.jsonl.zstd、
-  #     storages/session_projcache/sessions/*.json），全部来自 09-07~09-10。
-  #     这里只对"属主无读权限"的条目补 u+rwX（X 仅对目录/已可执行文件加 x，不改文件语义），
-  #     find 是只读元数据遍历，成本远低于上面的 chown（后者要写每个 inode）。
+  #     storages/session_projcache/sessions/*.json），全部来自 09-07~09-10；这些文件同时
+  #     导致 rescue 快照的 `cp -al`/`cp -a` 失败（→ 每次多占约 900MB 的嵌套副本）。
+  #     只对"属主无读权限"的条目补 u+rwX（X 仅对目录/已可执行文件加 x，不改文件语义）。
   #     失败不致命：只告警，绝不因此阻断启动（救命的 lifeboat 必须可达）。
   elog "[entrypoint]   normalizing owner-readable bits (fixes legacy 0000 files under uid $RUN_USER_ID)"
   for v in /opt/dsh /data/dsh /workspace; do
