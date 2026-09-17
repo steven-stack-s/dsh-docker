@@ -119,6 +119,7 @@ services:
     #   - read_only:true：根文件系统只读 —— dsh/agent/第三方插件无法在镜像层落盘或篡改
     #   - cap_drop:[ALL] + 最小 cap_add 白名单：容器进程几乎无 root capability
     #   - tmpfs /tmp：read_only 后唯一需要写盘的系统目录（mktemp/npm 构建临时等）
+    #     ⚠ 必须带 exec（见下方 tmpfs 行的说明）：Docker 的 tmpfs 默认 noexec
     # --------------------------------------------
     # 【为何保留 4 个 cap】非 root 运行链路需要：
     #   CHOWN / DAC_OVERRIDE  → entrypoint 首启把挂载卷 chown 给运行用户 node(1000)
@@ -131,7 +132,15 @@ services:
     # `scripts/t/e2e-container-selftest.sh` 确认卷权限与 rescue 链路正常。
     read_only: true
     tmpfs:
-      - /tmp:size=128m
+      # ⚠ 必须显式带 exec：Docker 的 tmpfs 默认挂载选项含 noexec，而 dsh 的 **profile 插件解析**
+      # 依赖原生插件 node-addon-native-custom-loader —— 它会把 node-addon-require-builtin 的
+      # .node 绑定复制到 $TMPDIR/node-addon-native-custom-loader-<uid>/native-cache/ 再 require()。
+      # 在 noexec 的 /tmp 上该 require 会以
+      #   "failed to map segment from shared object"
+      # 失败 → 绑定不可用 → dsh-app-boot 装不上 profile 解析 hook（loader.internal 为空）→
+      # 所有第三方插件 ERR_MODULE_NOT_FOUND → web profile 启动失败 → 自愈耗尽 → 进 lifeboat。
+      # （真机教训 2026-09-17：空 profile 不触发，只有装了插件的部署才会踩到。）
+      - /tmp:size=128m,exec
     cap_drop:
       - ALL
     cap_add:

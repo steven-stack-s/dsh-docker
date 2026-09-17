@@ -49,6 +49,18 @@
   `.env.example` 与 `docker-compose.yml` 的注释（"必填"改为"未装 dsh-remote 时必填"）、
   docs 01/02/04/05（中英同步，02 的"⚠ 必须把域名加进白名单"改为"ℹ 装 dsh-remote 时
   不需要"）。部署逻辑本身无改动。
+- **`tmpfs /tmp` 必须显式带 `exec`（真机故障修复，2026-09-17）**：Docker 的 tmpfs 默认带
+  `noexec`。dsh 的 **profile 插件解析**依赖原生插件 `node-addon-native-custom-loader`，它会把
+  `node-addon-require-builtin` 的 `.node` 绑定复制到 `$TMPDIR/node-addon-native-custom-loader-<uid>/native-cache/`
+  再 `require()`；在 `noexec` 的 `/tmp` 上该加载以 `failed to map segment from shared object`
+  失败 → 绑定不可用 → `dsh-app-boot` 装不上 profile 解析 hook（`loader.internal` 为空）→
+  **所有第三方插件 `ERR_MODULE_NOT_FOUND`** → web profile 启动失败 → 自愈耗尽 → 进 lifeboat。
+  `docker-compose.yml` 的 tmpfs 已改为 `/tmp:size=128m,exec`；`test-compose-wiring.sh` 增加
+  对应门禁。注意：**空 profile 的 e2e 不会触发此问题**，只有装了插件的部署才会踩到。
+- **修复 CI 红灯：`scripts/t/test-nonroot.sh` 缺可执行位**。仓库 `core.filemode=false`，
+  `git add` 不会记录执行位，导致新脚本以 `100644` 入库；CI 的 `test-script-modes.sh` 断言
+  `scripts/t/*.sh` 必须可执行，检出后即失败（本地因工作区恰好可执行而漏过）。已用
+  `git update-index --chmod=+x` 修正为 `100755`。
 
 ## [Unreleased]
 

@@ -71,6 +71,10 @@ grep -q 'cap_add' "$COMPOSE"  || fail hardening-missing-cap-add
 grep -q '  - ALL' "$COMPOSE"  || fail hardening-cap-drop-not-all
 grep -qE '^[[:space:]]*read_only:[[:space:]]*true' "$COMPOSE" || fail hardening-missing-read-only
 grep -q 'tmpfs' "$COMPOSE" || fail hardening-missing-tmpfs
+# tmpfs /tmp 必须显式带 exec：Docker 默认 noexec，会让原生插件
+# (node-addon-native-custom-loader) 的 /tmp 绑定缓存无法 dlopen，
+# 进而使 profile 插件解析 hook 缺失、第三方插件全部 MODULE_NOT_FOUND。
+grep -qE '/tmp:size=[0-9]+m,exec' "$COMPOSE" || fail hardening-tmpfs-missing-exec
 grep -q 'setpriv' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-setpriv-drop
 
 # 3) healthcheck 的 start_period 必须 > RESCUE_START_TIMEOUT（注释里写了的口径不变式）
