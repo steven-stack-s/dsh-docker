@@ -38,7 +38,7 @@ const docFiles=["docs/zh-CN/07-环境变量速查.md","docs/en/07-environment-va
 const docs=docFiles.map(f=>{ try { return fs.readFileSync(path.join(R,f),"utf8"); } catch { return ""; } }).join("\n");
 const PRE=/^(DSH_|RESCUE_|SOCAT_|NPM_|PROGRAMS_|WORKSPACE_|PIDS_|NODE_|MEM_|CPU_|DEEPSEEK_)/;
 // 内部/自动变量：由代码或 Dockerfile 提供，不应（也不能）由 compose 注入
-const internal=new Set(["REASON_SNAPSHOT","DSH_HOME","SOCAT_PID","SOCAT_PORT","RESCUE_PROBE"]);
+const internal=new Set(["REASON_SNAPSHOT","DSH_HOME","SOCAT_PID","SOCAT_PORT","RESCUE_PROBE","DSH_INIT_DONE"]);
 let bad=0;
 const missCompose=[...vars].filter(v=>PRE.test(v)&&!injected.has(v)&&!internal.has(v));
 if(missCompose.length){ console.error("  code reads but compose does NOT inject: "+missCompose.join(", ")); bad=1; }
@@ -65,6 +65,13 @@ done
 grep -q 'no-new-privileges' "$COMPOSE" || fail hardening-missing-no-new-privileges
 grep -q 'pids_limit' "$COMPOSE" || fail hardening-missing-pids-limit
 grep -q 'max-children' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-socat-max-children
+# 安全加固升级：非 root 运行 + capability 收敛 + 只读根 FS 也必须在位
+grep -q 'cap_drop' "$COMPOSE" || fail hardening-missing-cap-drop
+grep -q 'cap_add' "$COMPOSE"  || fail hardening-missing-cap-add
+grep -q '  - ALL' "$COMPOSE"  || fail hardening-cap-drop-not-all
+grep -qE '^[[:space:]]*read_only:[[:space:]]*true' "$COMPOSE" || fail hardening-missing-read-only
+grep -q 'tmpfs' "$COMPOSE" || fail hardening-missing-tmpfs
+grep -q 'setpriv' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-setpriv-drop
 
 # 3) healthcheck 的 start_period 必须 > RESCUE_START_TIMEOUT（注释里写了的口径不变式）
 sp=$(grep -m1 'start_period:' "$COMPOSE" | tr -cd '0-9')
