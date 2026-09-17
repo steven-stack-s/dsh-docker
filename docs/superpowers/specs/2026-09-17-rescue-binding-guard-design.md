@@ -245,6 +245,8 @@ K 的扫描开销**实测约 40ms**（真机 profile：216 个顶层包 / 21300 
 
 纯函数式检查器：参数解析 → 递归扫描 → 排序输出。无网络、无写入。
 
+> ⚠️ 新增文件**必须同步登记进镜像**，否则 `/opt/dsh-rescue/` 下没有它（详见 §7.6）。
+
 ### 7.2 `scripts/librescue.sh`
 
 | 函数 | 改动 |
@@ -269,6 +271,44 @@ K 的扫描开销**实测约 40ms**（真机 profile：216 个顶层包 / 21300 
 - `.env.example` → `RESCUE_BINDING_HEAL`
 - `docs/zh-CN/07-环境变量速查.md` + `docs/en/07-environment-variables.md` → 同一变量
 - `docs/zh-CN/06-救援模式.md` + `docs/en/06-rescue-mode.md` → 保留策略与修复行为说明
+
+### 7.6 `Dockerfile` —— 登记新文件进镜像（**规格补充项**）
+
+`Dockerfile:117` 是**显式文件清单**，新文件不登记则镜像里不存在：
+
+```dockerfile
+COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js \
+     scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh scripts/rescue /opt/dsh-rescue/
+```
+
+必须做三处登记：
+
+1. `COPY` 行加入 `scripts/binding-inventory.js`
+2. `Dockerfile:121` 的 `sed -i 's/\r$//'`（DOS 换行清理）清单中加入同一文件
+3. `Dockerfile:122` 的 `chmod +x` 清单中加入同一文件（与 `probe-ready.js` 一致）
+
+**解析方式**（**懒解析，不改 entrypoint**）：在 `librescue.sh` 内新增 `rescue_binding_kernel()`，
+首次调用时按候选列表定位并缓存 —— 这样 `entrypoint`、`rescue` CLI、`scripts/t/*` 三种
+调用上下文都能找到内核，且**完全不碰启动路径**（比在 entrypoint 里解析更符合 §1.4 红线）。
+
+```sh
+rescue_binding_kernel() {
+  [ -n "${RESCUE_BINDING_KERNEL:-}" ] && [ -f "${RESCUE_BINDING_KERNEL:-}" ] && {
+    printf '%s' "$RESCUE_BINDING_KERNEL"; return 0; }
+  for _c in /opt/dsh-rescue/binding-inventory.js \
+            "$HERE/binding-inventory.js" \
+            "$HERE/scripts/binding-inventory.js" \
+            "$HERE/../binding-inventory.js"; do
+    [ -n "$_c" ] && [ -f "$_c" ] && { RESCUE_BINDING_KERNEL="$_c"; printf '%s' "$_c"; return 0; }
+  done
+  return 1
+}
+```
+
+候选列表覆盖三种上下文：`entrypoint`/`rescue`（`$HERE` = `scripts/`）、
+`scripts/t/*`（`$HERE` = `scripts/t/`，靠 `../`）、镜像（`/opt/dsh-rescue/`）。
+
+缺失时：`A` 退化为「只钉最新基线」（现状），`B` 整体跳过并记日志 —— 均不影响启动。
 
 ## 8. 测试设计
 
