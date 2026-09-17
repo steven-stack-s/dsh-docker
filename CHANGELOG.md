@@ -102,6 +102,20 @@
 
 ## [Unreleased]
 
+### Changed
+- **compose 移除本地构建路径（`build:`），只保留 pull**。（真机教训 2026-09-17）
+  `image:` 与 `build:` 共用同一个 tag 时，只要本地没有该镜像，`docker compose up -d` 会
+  **回退成"用当前目录的 Dockerfile/scripts 构建"而不是报错**。于是「把 `DSH_IMAGE` 换成本次
+  要升级的 tag、但该 tag 在 ghcr 上还没发布」这种情形会**静默退化**为跑一份"用旧 checkout
+  构建、名字却像新版本"的镜像 —— 真机表现就是容器内 `/usr/local/bin/dsh-entrypoint` 仍是
+  上一版（`DSH_INIT_DONE` 不存在）、日期停在旧构建日，而人以为已经在跑新 tag，排查时极具
+  误导性。移除后 **pull 不到即硬失败**，不再有"看似升级成功、实则跑旧代码"的中间态。
+  确需自建（离线/内网、换 `APT_MIRROR`、自定义 Node 基础镜像）请显式
+  `docker build --build-arg DSH_VERSION=<版本> -t <你的tag> .`，再把该 tag 填进 `DSH_IMAGE`。
+  同步更新：docs 07（中英，`DSH_VERSION`/`PNPM_VERSION` 不再经 compose 生效，仅 `--build-arg`）、
+  docs 06（中英，重建容器改用 `docker compose pull && up -d`）；
+  `test-compose-wiring.sh` 增加"compose 不得声明 `build:`"门禁（忽略注释行）。
+
 ## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
 
 > 跟进 `rescue clean` 功能落地（任务 1-7 + 最终广度评审）。镜像 seed 锁定的 DSH 版本

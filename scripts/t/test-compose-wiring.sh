@@ -80,6 +80,15 @@ grep -qE '/tmp:size=[0-9]+m,exec' "$COMPOSE" || fail hardening-tmpfs-missing-exe
 grep -q 'NARB_DISABLE_NATIVE_CACHE=1' "$ROOT/Dockerfile" || fail dockerfile-missing-narb-native-cache
 grep -q 'setpriv' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-setpriv-drop
 
+# compose 不得再有本地构建路径（真机教训 2026-09-17）：`image:` 与 `build:` 共用同一个
+# tag 时，只要本地没有该镜像，`docker compose up -d` 会回退成"用当前目录构建"而不是报错，
+# 于是「换成还没发布的新 tag」会静默跑一份用旧代码构建的镜像。断言时忽略注释行。
+if grep -vE '^[[:space:]]*#' "$COMPOSE" | grep -qE '^[[:space:]]*build:'; then
+  fail compose-should-not-declare-build
+fi
+# 反向护栏：确保上面那条不是"因为文件读不到才通过"
+grep -qE '^[[:space:]]*image:' "$COMPOSE" || fail compose-missing-image
+
 # 3) healthcheck 的 start_period 必须 > RESCUE_START_TIMEOUT（注释里写了的口径不变式）
 sp=$(grep -m1 'start_period:' "$COMPOSE" | tr -cd '0-9')
 rst=$(grep -m1 '^      - RESCUE_START_TIMEOUT=' "$COMPOSE" | tr -cd '0-9')

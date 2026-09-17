@@ -22,20 +22,20 @@ services:
   dsh:
     # 镜像拉取策略：默认 ghcr.io 的 :latest（跟随最近一次 v*-dsh* tag 发布的锁定版本）。
     #   要彻底锁死某个版本，请显式指定 DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<项目版本>-dsh-<dsh版本>
-    #   例如 v0.4.4-dsh-0.1.6-alpha.1（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
+    #   例如 v0.4.7-dsh-0.1.6-alpha.1（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
     image: ${DSH_IMAGE:-ghcr.io/steven-stack-s/dsh-docker:latest}
-    # 本地 build：docker compose up -d --build（产物按上方 image: 名 tag；构建时锁定 dsh 版本）
-    #   DSH_VERSION 默认跟随 Dockerfile 的 ARG 默认值（当前 0.1.6-alpha.1），
-    #   可在 .env 设 DSH_VERSION=<版本> 覆盖。两处默认值必须保持一致，否则不传该变量时
-    #   docker build 与 docker compose build 会产出不同 dsh 版本的镜像。
-    #   注意：当前锁定的是 alpha 版本，装它必须写全版本号 —— npm 的 latest/next 都拿不到。
-    #   注意：pull 的 :latest 与本 build 的 DSH_VERSION 是两个来源，别混用（要么纯 pull 锁 DSH_IMAGE，要么纯 build）。
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DSH_VERSION: ${DSH_VERSION:-0.1.6-alpha.1}
-        PNPM_VERSION: ${PNPM_VERSION:-latest}
+    # 【为什么这里刻意没有 build:】
+    #   真机教训（2026-09-17）：当 `image:` 与 `build:` 共用同一个 tag 时，只要本地没有该镜像，
+    #   `docker compose up -d` 就会回退成「用当前目录的 Dockerfile/scripts 构建」，而不是报错。
+    #   于是「把 DSH_IMAGE 换成本次要升级的 tag、但该 tag 在 ghcr 上还没发布」这种情形会
+    #   **静默退化**为跑一份"用旧 checkout 构建、名字却像新版本"的镜像 —— 排查时极具误导性
+    #   （真机表现：容器内 /usr/local/bin/dsh-entrypoint 仍是上一版，`DSH_INIT_DONE` 不存在，
+    #   却以为已经在跑新 tag）。
+    #   去掉 build 后，pull 不到就是硬失败，不会再有"看似升级成功、实则跑旧代码"的中间态。
+    #   确需自建（离线/内网、换 APT 镜像源、自定义 Node 基础镜像）请显式用 docker build：
+    #     docker build --build-arg DSH_VERSION=<版本> --build-arg APT_MIRROR=mirrors.aliyun.com \
+    #       -t <你的仓库>/dsh-docker:<版本> .
+    #   然后把该 tag 填进 .env 的 DSH_IMAGE。（构建参数说明见 Dockerfile 顶部与 docs/07）
     container_name: ${DSH_CONTAINER_NAME:-dsh}
     restart: unless-stopped
 

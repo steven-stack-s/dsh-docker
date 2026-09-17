@@ -92,9 +92,9 @@ Since v0.4.6 the image runs as a **non-root** user and tightens capabilities + r
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DSH_IMAGE` | `ghcr.io/steven-stack-s/dsh-docker:latest` | Image pulled at `up`. To pin a version explicitly, use the `v<project>-dsh-<dsh>` tag scheme. For local-build scenarios, switch to your own tag (e.g. `dsh-base:final`). |
-| `DSH_VERSION` | `0.1.6-alpha.1` | **Only used for local builds** (compose `build.args`); pins the dsh version baked into the seed. The pulled `:latest` and the local `DSH_VERSION` are two different sources — do not mix. |
-| `PNPM_VERSION` | `latest` | **Only used for local builds**; pins the pnpm version baked into the seed. |
+| `DSH_IMAGE` | `ghcr.io/steven-stack-s/dsh-docker:latest` | Image pulled at `up`. To pin a version explicitly, use the `v<project>-dsh-<dsh>` tag scheme. |
+| `DSH_VERSION` | (not in compose) | **For manual `docker build` only** (`--build-arg DSH_VERSION=<version>`): pins the dsh version baked into the seed. Compose **deliberately exposes no local build path** — when `image:` and `build:` share one tag, `docker compose up -d` silently falls back to building from the current directory instead of failing, so switching `DSH_IMAGE` to a tag that is not published yet would quietly run an image built from stale code (hit on a real deployment, 2026-09-17). See the comment above `services:` in `docker-compose.yml`. |
+| `PNPM_VERSION` | (not in compose) | Same as above — manual `docker build` only; pins the pnpm version baked into the seed. |
 
 ---
 

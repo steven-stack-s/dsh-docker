@@ -30,10 +30,11 @@ This repo persists DSH in two parts:
 
 Rescue capability is **on by default** — no extra configuration needed:
 
-1. The image must ship the rescue tooling (`/opt/dsh-rescue` and the `rescue` command), baked in by this repo's Dockerfile. If your container is older and `docker exec dsh rescue status` reports command not found, rebuild the container:
+1. The image must ship the rescue tooling (`/opt/dsh-rescue` and the `rescue` command), baked in by this repo's Dockerfile. If your container is older and `docker exec dsh rescue status` reports command not found, pull a newer image and recreate the container:
 ```bash
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
+> Building locally? Run `docker build --build-arg DSH_VERSION=<version> -t <your-tag> .` first, then point `DSH_IMAGE` at that tag. Compose **deliberately exposes no local build path** (see the comment above `services:` in `docker-compose.yml`: sharing one tag between `image:` and `build:` makes a failed pull silently fall back to stale local code).
 2. No data-volume migration needed — snapshots live inside the DSH data volume (see §6).
 
 Relevant environment variables (`.env`; inside the container, inspect with `docker exec dsh env | grep RESCUE`):
