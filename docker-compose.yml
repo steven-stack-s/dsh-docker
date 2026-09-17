@@ -44,7 +44,11 @@ services:
       - DSH_HOME=/data/dsh
       # 容器内非 root 运行用户（uid:gid）。默认 1000:1000 = 多数 NAS/宿主首个非 root 用户，
       # 与 bind mount 目录属主最友好。entrypoint 首启会 chown 三个挂载卷到此用户后降权运行。
-      # 如宿主按特定 uid/gid 建了目录，可在此覆盖（须与 Dockerfile 构建的 USER_UID/USER_GID 一致）。
+      # 仅当宿主上卷属主【不是 1000】时才需要在 .env 覆盖；不写即 1000。
+      # （无需与镜像构建参数对齐：镜像已不声明 USER_UID/USER_GID build-arg，直接复用自带的
+      #   node 用户 1000。旧注释「须与 Dockerfile 构建参数一致」是错的，已删。）
+      # ⚠ 该 uid 最好能在容器 /etc/passwd 中查到（1000 即自带的 node 用户）；填一个查不到的
+      #   uid 不会导致启动失败，但 entrypoint 会退化为「不带附加组」降权。
       - USER_UID=${USER_UID:-1000}
       - USER_GID=${USER_GID:-1000}
       # Node 堆上限（按宿主机内存调整；须 << MEM_LIMIT，DSH 多进程 RSS 超堆值，堆过大易被容器 OOM-kill）

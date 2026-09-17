@@ -98,11 +98,15 @@ ENV TZ=Asia/Shanghai
 # 【运行用户】直接复用 node:24-slim 镜像自带的 `node` 用户：uid=1000 gid=1000。
 #   它天然契合"uid 1000:1000 = 多数 NAS/宿主首个非 root 用户"，对 bind mount 属主最友好；
 #   且无需新建用户（node 镜像已自带）。entrypoint 用 setpriv 降权到 uid 1000 运行。
-# 【USER_UID/USER_GID】如需按宿主覆盖 uid/gid，可经 build-arg + 环境变量传入；
-#   默认保持 1000:1000（与 node 用户一致）。注意：若改成非 1000，需宿主目录属主匹配。
+# 【USER_UID/USER_GID】纯**运行时**环境变量（compose 的 environment 注入），不是 build-arg：
+#   镜像刻意不自建用户，而是直接复用 node:24-slim 自带的 `node` 用户（uid 1000 gid 1000），
+#   由 entrypoint 在首启时把三个挂载卷 chown 到该 uid 再降权。
+#   故这里**不再声明** ARG USER_UID/USER_GID —— 曾经声明过但从未被任何指令消费（死参数），
+#   却让文档误以为"必须与构建参数一致"，属于误导。
+#   覆盖方式：在 .env 里设 USER_UID/USER_GID（仅当宿主卷属主不是 1000 时才需要；
+#   不设即 1000，与 node 用户一致）。注意该 uid 最好能在容器 /etc/passwd 里查到，
+#   否则 entrypoint 会退化为"不带附加组"降权（见 entrypoint 第 ⑥ 步）。
 # ============================================================================
-ARG USER_UID=1000
-ARG USER_GID=1000
 
 WORKDIR /workspace
 EXPOSE 3080

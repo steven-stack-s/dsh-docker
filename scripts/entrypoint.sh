@@ -157,9 +157,23 @@ PPF
   fi
 
   # ⑥ 降权并重新 exec 本脚本。DSH_INIT_DONE 防止二次进入时再走本块。
+  #
+  # 【为何要探测 --init-groups】setpriv 的 --init-groups 会用 /etc/passwd 反查该 uid 的
+  # 用户名，**uid 不存在时直接失败**：
+  #   setpriv: uid 9999 not found, --init-groups requires an user that can be found on the system
+  # 本镜像只自带 root 与 node(1000)。若使用者按文档/.env.example 的提示把 USER_UID 改成
+  # 宿主上的其它 uid（例如 1024），这条 exec 会在 set -e 下失败 → PID1 退出 → 容器重启死循环，
+  # 而且该块排在 lifeboat 之前，**连救生舱都到不了**（真机同类症状：2026-09-17）。
+  # 故先探测：能 --init-groups 就带（补全附加组），不能就只设 uid/gid 降权并告警。
   export DSH_INIT_DONE=1
-  elog "[entrypoint] dropping privileges to uid=$RUN_USER_ID gid=$RUN_GROUP_ID"
-  exec setpriv --reuid="$RUN_USER_ID" --regid="$RUN_GROUP_ID" --init-groups "$0" "$@"
+  if setpriv --reuid="$RUN_USER_ID" --regid="$RUN_GROUP_ID" --init-groups true 2>/dev/null; then
+    elog "[entrypoint] dropping privileges to uid=$RUN_USER_ID gid=$RUN_GROUP_ID"
+    exec setpriv --reuid="$RUN_USER_ID" --regid="$RUN_GROUP_ID" --init-groups "$0" "$@"
+  fi
+  elog "[entrypoint] WARN uid $RUN_USER_ID not resolvable in /etc/passwd; dropping without supplementary groups"
+  elog "[entrypoint]      (supplementary groups are empty; uid/gid still applied as requested)"
+  export DSH_INIT_DONE=1
+  exec setpriv --reuid="$RUN_USER_ID" --regid="$RUN_GROUP_ID" "$0" "$@"
 fi
 
 # dsh web 刻意只监听 127.0.0.1（--host 0.0.0.0 被安全拒绝）。

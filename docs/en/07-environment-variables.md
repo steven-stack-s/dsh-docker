@@ -62,9 +62,16 @@ Since v0.4.6 the image runs as a **non-root** user and tightens capabilities + r
 - **Run user**: the in-image `node` user (uid 1000 gid 1000). The entrypoint first runs as root to seed
   `/opt/dsh` and `chown` the three mounted volumes to the run user, then uses `setpriv` to drop to
   uid 1000 before running dsh / socat / upgrades / rescue. Persistent in-container processes are **not root**.
-- **`USER_UID` / `USER_GID`**: override the non-root run user (default `1000`). Most NAS / host
-  first non-root user is `1000`, matching the volume ownership; if the host created dirs with a
-  specific uid (e.g. `1024`), set these to match (must equal the Dockerfile build args).
+- **`USER_UID` / `USER_GID`**: override the non-root run user (**usually unnecessary** — leaving them
+  unset means `1000:1000`, defaulted by both compose (`${USER_UID:-1000}`) and the entrypoint, and the
+  image's built-in `node` user is already `1000`, which matches most NAS/host first non-root users and
+  the three mounted volumes). Only override when the volumes on the host are owned by a **different**
+  uid and you want to run as that uid.
+  ⚠ Prefer a uid that exists in the container's `/etc/passwd` (`1000` = the built-in `node` user):
+  `setpriv --init-groups` needs to resolve a username. An unresolvable uid does **not** break startup —
+  the entrypoint falls back to dropping privileges **without supplementary groups** (uid/gid still honored).
+  (The old note "must equal the Dockerfile build args" was wrong: the image no longer declares those
+  build args — they were dead parameters.)
 - **Capability convergence** (`docker-compose.yml`): `cap_drop: [ALL]` + minimal allowlist
   `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`. These four are only needed for first-boot
   `chown` of the volumes and `setpriv` uid drop; runtime dsh/agent processes (uid 1000) lack them.

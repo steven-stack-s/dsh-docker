@@ -67,6 +67,11 @@ grep -q -- '-not -user' "$ENTRY" || fail entrypoint-missing-targeted-chown
 if grep -qF 'chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$v"' "$ENTRY"; then
   fail entrypoint-regressed-to-recursive-volume-chown
 fi
+# 降权必须容忍"uid 在 /etc/passwd 中查不到"：setpriv --init-groups 会直接失败（rc=1），
+# 在 set -e 下会让 PID1 退出 -> 重启死循环，且该块排在 lifeboat 之前（连救生舱都到不了）。
+# 故必须先探测，失败则退化为不带附加组降权。
+grep -q -- '--init-groups true' "$ENTRY" || fail entrypoint-missing-initgroups-probe
+grep -q 'not resolvable in /etc/passwd' "$ENTRY" || fail entrypoint-missing-initgroups-fallback
 
 # ---- 3) Dockerfile：声明非 root 运行用户（复用镜像自带 node 用户 uid=1000），
 #        且没有直接 `USER 1000` 收尾（应保留 root 启动，由 entrypoint 降权后再进运行流程）。
@@ -75,6 +80,11 @@ fi
 grep -q 'USER_UID' "$DFILE" || fail dockerfile-missing-user-uid-arg
 grep -q 'USER_GID' "$DFILE" || fail dockerfile-missing-user-gid-arg
 grep -qiE '1000:1000|uid.?1000|node 用户' "$DFILE" || fail dockerfile-missing-run-user-comment
+# 不得再声明 ARG USER_UID/USER_GID：它们曾是"声明了却从不被消费"的死参数，
+# 却让 .env.example/docs 误以为"必须与构建参数一致"。运行用户只由运行时环境变量决定。
+if grep -qE '^[[:space:]]*ARG[[:space:]]+USER_(UID|GID)' "$DFILE"; then
+  fail dockerfile-declares-dead-user-arg
+fi
 if grep -qE '^[[:space:]]*USER[[:space:]]+[0-9]+' "$DFILE"; then
   # 镜像最终以 root 启动（无数字 USER），由 entrypoint setpriv 降权；禁止直接 `USER 1000`。
   fail dockerfile-direct-user

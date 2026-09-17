@@ -102,7 +102,23 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`USER_UID`/`USER_GID` 指向容器内不存在的 uid 会重启死循环**（真机 2026-09-17 实测）。
+  `setpriv --init-groups` 需要用 `/etc/passwd` 反查该 uid 的用户名，查不到就直接失败：
+  `setpriv: uid 1024 not found, --init-groups requires an user that can be found on the system`。
+  而 entrypoint 第 ⑥ 步的 `exec setpriv` 在 `set -e` 下会终止 PID1 → 容器重启死循环，
+  且该块排在 lifeboat 之前 —— **连救生舱都到不了**（与 2026-09-17 同类症状）。
+  更糟的是 `.env.example` 当时正建议用户「按宿主 uid（如 1024）改成对应值」，等于把人往坑里带。
+  现在 entrypoint 会先探测（`setpriv ... --init-groups true`），失败则退化为**不带附加组**降权
+  并打印告警：uid/gid 仍按指定生效，只是 supplementary groups 为空 —— 不中断启动。
+
 ### Changed
+- **`Dockerfile` 删除死参数 `ARG USER_UID`/`ARG USER_GID`**：它们声明后从未被任何指令消费，
+  却让 `.env.example`/compose/docs 长期写着「须与 Dockerfile 构建参数一致」这种错误约束。
+  运行用户只由**运行时环境变量**决定（compose 的 `${USER_UID:-1000}` + entrypoint 双层兜底，
+  镜像自带的 `node` 用户即 1000），因此 `.env` 里通常**无需**写这两项 —— `.env.example` 已改为
+  默认注释掉，并说明「仅当宿主卷属主不是 1000 时才需要」。compose/docs 07（中英）同步纠正。
+  `test-nonroot.sh` 增加两条门禁：必须有 initgroups 探测与退化路径；Dockerfile 不得再声明该 ARG。
 - **compose 移除本地构建路径（`build:`），只保留 pull**。（真机教训 2026-09-17）
   `image:` 与 `build:` 共用同一个 tag 时，只要本地没有该镜像，`docker compose up -d` 会
   **回退成"用当前目录的 Dockerfile/scripts 构建"而不是报错**。于是「把 `DSH_IMAGE` 换成本次
