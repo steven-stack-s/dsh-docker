@@ -40,6 +40,22 @@ RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ]; then
   elog "[entrypoint] root first-boot: preparing seed + volume ownership, then dropping to uid $RUN_USER_ID"
 
+  # ⓪ 运行用户的 HOME 必须可用（真机故障修复 2026-09-17）。
+  #    镜像刻意不设 HOME，Docker 会给 root 的 /root；而 /root 是 700 root —— 降权到 uid 1000
+  #    后连读都不行。pnpm 会去读 $HOME/.config/pnpm/config.yaml，直接 EACCES：
+  #      Failed to read pnpm-workspace.yaml at /root/.config/pnpm/config.yaml:
+  #      Permission denied (os error 13)
+  #    表现为插件市场「找到 pnpm 了，但 pnpm --version 失败」（实测：HOME=/root 报上述错，
+  #    HOME 指向可写目录则 pnpm 12.4.2 正常；pnpm 本体完整，不是 corepack shim）。
+  #    这里在整备卷属主【之前】把 HOME 指到数据卷内，后面的 ③/③b 会连带把属主与权限修好。
+  #    已是自定义值（用户显式传入）则尊重，不动。
+  _home_before="${HOME:-<unset>}"
+  if [ -z "${HOME:-}" ] || [ "$HOME" = "/root" ]; then
+    export HOME=/data/dsh/home
+    mkdir -p "$HOME" 2>/dev/null || true
+    elog "[entrypoint]   run-user HOME $_home_before is not usable by uid $RUN_USER_ID -> $HOME"
+  fi
+
   # ① 首启：把镜像内 /opt/dsh-seed 复制到挂载卷 /opt/dsh
   if ! command -v dsh >/dev/null 2>&1; then
     elog "[entrypoint]   seeding @deepseek-ai/dsh into mounted volume /opt/dsh ..."

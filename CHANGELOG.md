@@ -103,6 +103,24 @@
 ## [Unreleased]
 
 ### Fixed
+- **非 root 下 HOME 指向不可读的 /root，导致插件市场 pnpm 全废**（真机故障修复 2026-09-17）。
+  镜像刻意不设 HOME，Docker 会给 root 的 `/root`；而 `/root` 是 `700 root` —— 降权到 uid 1000
+  后连读都不行。pnpm 启动时会读 `$HOME/.config/pnpm/config.yaml`，于是直接 EACCES：
+  ```
+  Error:   × load configuration
+    ╰─▶ Failed to read pnpm-workspace.yaml at /root/.config/pnpm/config.yaml:
+        Permission denied (os error 13)
+  ```
+  表现为插件市场报「找到 pnpm 了，但运行 `pnpm --version` 失败」。
+  **实测对照**：`HOME=/root` → 上述报错；`HOME` 指向可写目录 → `pnpm --version` 输出 `12.4.2` 正常。
+  另澄清：pnpm 本体是完整 bundle（48MB 单文件 + `dist/`），**不是**需要联网下载的 corepack shim，
+  故「设 PNPM_HOME / corepack / brew 重装 pnpm」都是错误方向。
+  修复：compose 显式 `HOME=/data/dsh/home`（随数据卷持久化）+ entrypoint 在属主整备前自动纠正
+  （原值为空或 `/root` 时改指数据卷内并建目录；用户显式传入其它值则尊重）。
+  这同时修好了任何依赖 `$HOME` 的工具（git/gitconfig、插件里的 `os.homedir()`）。
+  `test-nonroot.sh` 增加两条门禁（entrypoint 兜底 + compose 显式指定）。
+
+### Fixed
 - **`USER_UID`/`USER_GID` 指向容器内不存在的 uid 会重启死循环**（真机 2026-09-17 实测）。
   `setpriv --init-groups` 需要用 `/etc/passwd` 反查该 uid 的用户名，查不到就直接失败：
   `setpriv: uid 1024 not found, --init-groups requires an user that can be found on the system`。

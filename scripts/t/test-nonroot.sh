@@ -72,6 +72,11 @@ fi
 # 故必须先探测，失败则退化为不带附加组降权。
 grep -q -- '--init-groups true' "$ENTRY" || fail entrypoint-missing-initgroups-probe
 grep -q 'not resolvable in /etc/passwd' "$ENTRY" || fail entrypoint-missing-initgroups-fallback
+# 运行用户的 HOME 必须可用：镜像不设 HOME -> Docker 给 root 的 /root(700 root)，降权到 uid 1000
+# 后连读都不行，pnpm 读 $HOME/.config/pnpm/config.yaml 直接 EACCES（插件市场报错真因）。
+# 镜像层兜底（entrypoint 自动改指）+ compose 显式指定，两条都必须在位。
+grep -q 'run-user HOME' "$ENTRY" || fail entrypoint-missing-home-fix
+grep -qE '^[[:space:]]*- HOME=' "$COMPOSE" || fail compose-missing-home
 
 # ---- 3) Dockerfile：声明非 root 运行用户（复用镜像自带 node 用户 uid=1000），
 #        且没有直接 `USER 1000` 收尾（应保留 root 启动，由 entrypoint 降权后再进运行流程）。
