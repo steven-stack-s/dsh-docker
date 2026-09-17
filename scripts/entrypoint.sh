@@ -47,11 +47,15 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
   #      Permission denied (os error 13)
   #    表现为插件市场「找到 pnpm 了，但 pnpm --version 失败」（实测：HOME=/root 报上述错，
   #    HOME 指向可写目录则 pnpm 12.4.2 正常；pnpm 本体完整，不是 corepack shim）。
-  #    这里在整备卷属主【之前】把 HOME 指到数据卷内，后面的 ③/③b 会连带把属主与权限修好。
+  #    默认值取 /workspace 而非 /data/dsh/home：**「新建会话 → 选择工作区」的选择器默认就列
+  #    HOME**（dsh-host-directory-picker-browse: `resolve(path ?? homedir())`），且 UI 默认
+  #    不显示隐藏文件 —— 放在只有 .config/.local 的目录里会让列表全空（"选取不到工作区"，
+  #    真机 2026-09-17）。而 /workspace 下的 code/ session/ 正是用户要选的工作区。
+  #    在整备卷属主【之前】设定，后面的 ③/③b 会连带把属主与权限修好；
   #    已是自定义值（用户显式传入）则尊重，不动。
   _home_before="${HOME:-<unset>}"
   if [ -z "${HOME:-}" ] || [ "$HOME" = "/root" ]; then
-    export HOME=/data/dsh/home
+    export HOME=/workspace
     mkdir -p "$HOME" 2>/dev/null || true
     elog "[entrypoint]   run-user HOME $_home_before is not usable by uid $RUN_USER_ID -> $HOME"
   fi

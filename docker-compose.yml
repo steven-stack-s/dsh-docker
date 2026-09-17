@@ -42,15 +42,25 @@ services:
     environment:
       # 数据根目录（显式指定，不依赖容器内 HOME）
       - DSH_HOME=/data/dsh
-      # 运行用户的 HOME（**非 root 下必须可读写**）。镜像刻意不设 HOME，Docker 会给 root 的
-      # /root；而 /root 是 700 root —— 降权到 uid 1000 后连读都不行。真机症状（2026-09-17）：
-      # 插件市场报「找到 pnpm 但 pnpm --version 失败」，pnpm 原始输出：
-      #   Failed to read pnpm-workspace.yaml at /root/.config/pnpm/config.yaml:
-      #   Permission denied (os error 13)
-      # 实测：HOME=/root → 上述报错；HOME 指向可写目录 → pnpm 12.4.2 正常。
-      # （pnpm 本体是完整的 48MB bundle，不是需要联网的 corepack shim，无需重装。）
-      # 指向数据卷内的子目录，随数据卷持久化；uid 1000 拥有 /data/dsh，可自行创建。
-      - HOME=/data/dsh/home
+      # 运行用户的 HOME（**非 root 下必须可读写**，且**必须是"默认打开就有内容"的目录**）。
+      #
+      # ① 为什么要设：镜像刻意不设 HOME，Docker 会给 root 的 /root；而 /root 是 700 root ——
+      #    降权到 uid 1000 后连读都不行。真机症状（2026-09-17）：插件市场报「找到 pnpm 但
+      #    pnpm --version 失败」，pnpm 原始输出：
+      #      Failed to read pnpm-workspace.yaml at /root/.config/pnpm/config.yaml:
+      #      Permission denied (os error 13)
+      #    实测：HOME=/root → 上述报错；HOME 指向可写目录 → pnpm 12.4.2 正常。
+      #    （pnpm 本体是完整的 48MB bundle，不是需要联网的 corepack shim，无需重装。）
+      #
+      # ② 为什么是 /workspace 而不是 /data/dsh/home：
+      #    「新建会话 → 选择工作区」的选择器**默认就列 HOME**，且 UI 默认**不显示隐藏文件**：
+      #      const target = resolve(path ?? homedir());   // dsh-host-directory-picker-browse
+      #    放在 /data/dsh/home 时里面只有 .config/.local 等隐藏项 → 列表全空 → 用户"选取不到
+      #    工作区"（真机 2026-09-17）。而 /workspace 下就是 code/ session/ 两个可见目录，
+      #    选择器一打开即可选。HOME 里的 .config/.local/.gitconfig 等仍是隐藏项，不会污染列表。
+      #    该选择器没有可配置的起始目录（browse 后端只暴露 maxEntries），故用 HOME 来定默认值。
+      #    ⚠ 改这里前请确认目标目录对运行用户可写、且其**非隐藏**子目录正是你想让用户看到的。
+      - HOME=/workspace
       # 容器内非 root 运行用户（uid:gid）。默认 1000:1000 = 多数 NAS/宿主首个非 root 用户，
       # 与 bind mount 目录属主最友好。entrypoint 首启会 chown 三个挂载卷到此用户后降权运行。
       # 仅当宿主上卷属主【不是 1000】时才需要在 .env 覆盖；不写即 1000。

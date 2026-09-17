@@ -103,6 +103,16 @@
 ## [Unreleased]
 
 ### Fixed
+- **"选择工作区"列表为空：HOME 不能是没有可见子目录的目录**（真机 2026-09-17）。
+  「新建会话 → 选择工作区」的选择器**默认就列 HOME**，且 UI 默认**不显示隐藏文件**：
+  `const target = resolve(path ?? homedir())`（`dsh-host-directory-picker-browse`）。
+  上一条修复把 HOME 设成 `/data/dsh/home` 时，该目录只有 `.config/.local` 等隐藏项，
+  列表因此全空 —— 用户表现为"工作区选取不到"。改用 `HOME=/workspace`：其下的
+  `code/`、`session/` 正是要选的工作区，而 `~/.config`、`~/.local`、`~/.gitconfig`
+  仍是隐藏项、不会污染列表。entrypoint 的兜底默认值同步改为 `/workspace`。
+  （该选择器没有可配置的起始目录：browse 后端只暴露 `maxEntries`，故只能由 HOME 决定。）
+  `test-nonroot.sh` 改为**锁值**断言，避免再退回成空列表的目录。
+
 - **非 root 下 HOME 指向不可读的 /root，导致插件市场 pnpm 全废**（真机故障修复 2026-09-17）。
   镜像刻意不设 HOME，Docker 会给 root 的 `/root`；而 `/root` 是 `700 root` —— 降权到 uid 1000
   后连读都不行。pnpm 启动时会读 `$HOME/.config/pnpm/config.yaml`，于是直接 EACCES：
@@ -120,7 +130,6 @@
   这同时修好了任何依赖 `$HOME` 的工具（git/gitconfig、插件里的 `os.homedir()`）。
   `test-nonroot.sh` 增加两条门禁（entrypoint 兜底 + compose 显式指定）。
 
-### Fixed
 - **`USER_UID`/`USER_GID` 指向容器内不存在的 uid 会重启死循环**（真机 2026-09-17 实测）。
   `setpriv --init-groups` 需要用 `/etc/passwd` 反查该 uid 的用户名，查不到就直接失败：
   `setpriv: uid 1024 not found, --init-groups requires an user that can be found on the system`。

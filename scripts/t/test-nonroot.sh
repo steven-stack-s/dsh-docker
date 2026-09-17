@@ -76,7 +76,12 @@ grep -q 'not resolvable in /etc/passwd' "$ENTRY" || fail entrypoint-missing-init
 # 后连读都不行，pnpm 读 $HOME/.config/pnpm/config.yaml 直接 EACCES（插件市场报错真因）。
 # 镜像层兜底（entrypoint 自动改指）+ compose 显式指定，两条都必须在位。
 grep -q 'run-user HOME' "$ENTRY" || fail entrypoint-missing-home-fix
-grep -qE '^[[:space:]]*- HOME=' "$COMPOSE" || fail compose-missing-home
+# HOME 同时是「新建会话 → 选择工作区」选择器的**默认目录**，该 UI 默认不显示隐藏文件
+# （dsh-host-directory-picker-browse: resolve(path ?? homedir())）。故它必须有可见子目录：
+# /workspace 下有 code/ session/；换成只有 .config/.local 的目录会让列表全空、用户
+# "选取不到工作区"（真机 2026-09-17）。锁值，避免无意改回。
+grep -qE '^[[:space:]]*- HOME=/workspace$' "$COMPOSE" || fail compose-home-must-be-workspace
+grep -q 'export HOME=/workspace' "$ENTRY" || fail entrypoint-home-fallback-must-be-workspace
 
 # ---- 3) Dockerfile：声明非 root 运行用户（复用镜像自带 node 用户 uid=1000），
 #        且没有直接 `USER 1000` 收尾（应保留 root 启动，由 entrypoint 降权后再进运行流程）。
