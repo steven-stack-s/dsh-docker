@@ -4,103 +4,14 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [v0.4.6-dsh-0.1.6-alpha.1] - 2026-09-17
-
-> 跟随**容器安全加固**落地（非 root 运行 + capability/只读硬化）。镜像 seed 锁定的 DSH 版本
-> 仍为 `0.1.6-alpha.1`（与 v0.4.5 相同），**部署/升级/entrypoint 安全模型做了实质改动**：容器由
-> root 改为非 root（uid 1000）运行、`cap_drop`+`read_only` 收紧；同时修正
-> `DSH_TRUSTED_HOSTS` 与 dsh-remote 关系的文档口径（装认证插件后无需白名单）。
-
-### Added
-- **容器安全加固：改为非 root 运行 + 收紧 capability/只读**（在 v0.4.5 之上的部署硬化）。
-  - **非 root 运行**：`Dockerfile` 新增 `USER_UID`/`USER_GID`（默认 `1000:1000`），复用镜像自带
-    的 `node` 用户（node:24-slim 内置 uid=1000 gid=1000，无需再 groupadd/useradd）。
-    镜像**不**直接 `USER 1000`，而是保留 root 启动，由 `entrypoint` 首启完成 seed 复制 +
-    把三个挂载卷（`/opt/dsh`、`/data/dsh`、`/workspace`）`chown` 给运行用户后，用
-    `setpriv` 降权到 uid 1000 再运行 socat / 监督循环 / dsh web。常驻进程（dsh、agent、
-    npm/pnpm 升级、rescue 快照/自愈）一律非 root。`docker exec` 仍保留 root 运维通道。
-  - **capability 收敛**：`docker-compose.yml` 启用 `cap_drop: [ALL]` + 最小白名单
-    `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`（仅供首启 chown 挂载卷与 setpriv 降权）。
-  - **只读根 FS**：`read_only: true` + `tmpfs /tmp`（128m）。根 FS 只读后，`NPM_CONFIG_CACHE`
-    由 entrypoint 默认兜底到可写卷 `/opt/dsh/.npm-cache`（`_cacache` 清理仍命中）。
-  - **web profile 固化为 `patchReload: startup`（关闭 HMR）**：`web` 是 dsh 唯一默认
-    `patchReload:"live"`（改 cordis.patch.yml 即时热重载）的 profile；但其 HMR 依赖的 native
-    addon（`node-addon-require-builtin`）在 `read_only` 根 FS 下无可用 binding，启动即抛
-    `--expose-internals is required`，dsh 崩溃且 rescue 无法自愈。`entrypoint` 首启会在 root
-    段把 web profile manifest 改写为 `patchReload: "startup"`（dsh 官方合法值，改配置后
-    `docker restart` 生效，与 acp/headless/sdk 默认一致）。生产加固语义下关闭实时热重载。
-    这是 read_only + dsh 0.1.6-alpha.1 的已知交互，`test-nonroot.sh` 已加对应断言。
-  - 新增 `USER_UID` / `USER_GID` 环境变量（compose 注入，默认 1000:1000）；`.env.example`
-    与 docs/07 速查表登记。
-  - 新增单测 `scripts/t/test-nonroot.sh`（seed 复制 / npm 升级 / rescue 快照+回滚三条链路
-    在非 root 下的可写性 + `cap_drop`/`read_only` 在位）。`test-compose-wiring.sh` 硬化
-    门禁已补 `cap_drop`/`read_only`/`tmpfs` 断言。
-  - **注意（NAS/内核）**：`cap_drop:[ALL]` 搭配部分 NAS 存储后端可能影响卷权限（尤其
-    rescue hardlink 快照的 `cp -al`）。已在本仓库 e2e 沙箱验证通过；部署到目标平台前
-    请先跑 `scripts/t/e2e-container-selftest.sh`。
-
-### Fixed
-- **文档口径修正：`DSH_TRUSTED_HOSTS` 与 dsh-remote 的关系**（2026-09-17 实测溯源）。
-  原文档把"必须加白否则 `/api` 403"写成无条件警告，但装了认证插件 dsh-remote 的部署
-  **不需要**白名单：其 `trustProxy` 在请求通过登录认证后把 Host/Origin 归一为 loopback
-  （`127.0.0.1:3081`）再交给 dsh 核心的 Host 信任围栏，围栏自然放行——实测任意域名/
-  隧道 Host 登录后 `/api` 均 200；未登录请求在 dsh-remote 的 gate 处即被 403。
-  该行为是 dsh-remote 的设计（认证层取代 Host 白名单）。受影响表述已全部修正：
-  `.env.example` 与 `docker-compose.yml` 的注释（"必填"改为"未装 dsh-remote 时必填"）、
-  docs 01/02/04/05（中英同步，02 的"⚠ 必须把域名加进白名单"改为"ℹ 装 dsh-remote 时
-  不需要"）。部署逻辑本身无改动。
-- **`tmpfs /tmp` 必须显式带 `exec`（真机故障修复，2026-09-17）**：Docker 的 tmpfs 默认带
-  `noexec`。dsh 的 **profile 插件解析**依赖原生插件 `node-addon-native-custom-loader`，它会把
-  `node-addon-require-builtin` 的 `.node` 绑定复制到 `$TMPDIR/node-addon-native-custom-loader-<uid>/native-cache/`
-  再 `require()`；在 `noexec` 的 `/tmp` 上该加载以 `failed to map segment from shared object`
-  失败 → 绑定不可用 → `dsh-app-boot` 装不上 profile 解析 hook（`loader.internal` 为空）→
-  **所有第三方插件 `ERR_MODULE_NOT_FOUND`** → web profile 启动失败 → 自愈耗尽 → 进 lifeboat。
-  `docker-compose.yml` 的 tmpfs 已改为 `/tmp:size=128m,exec`；`test-compose-wiring.sh` 增加
-  对应门禁。注意：**空 profile 的 e2e 不会触发此问题**，只有装了插件的部署才会踩到。
-- **修复 CI 红灯：`scripts/t/test-nonroot.sh` 缺可执行位**。仓库 `core.filemode=false`，
-  `git add` 不会记录执行位，导致新脚本以 `100644` 入库；CI 的 `test-script-modes.sh` 断言
-  `scripts/t/*.sh` 必须可执行，检出后即失败（本地因工作区恰好可执行而漏过）。已用
-  `git update-index --chmod=+x` 修正为 `100755`。
-
-## [v0.4.7-dsh-0.1.6-alpha.1] - 2026-09-17
-
-> 跟随 **v0.4.6 真机上线暴露的三个问题**修复（同一个 NAS 实例连续踩到）。
-> 镜像 seed 锁定的 DSH 版本仍为 `0.1.6-alpha.1`；本版**不改部署模型**，只把
-> 「非 root 迁移」与「tmpfs noexec」两类真实故障在镜像层兜住，使升级不再需要人工
-> 改 compose 或手工 chmod。
-
-### Fixed
-- **非 root 启动的第二个坑：属主无读权限的历史文件**。
-  `chown` 只改属主、**不改权限位**。真机 `/data/dsh` 下有 104 个模式为 `0000` 的
-  文件（`sessions/--*--/session.jsonl.zstd`、`storages/session_projcache/sessions/*.json`，
-  全部来自 09-07~09-10），连属主自己都读不了：以 root 运行时被 `CAP_DAC_OVERRIDE` 掩盖，
-  降权到 uid 1000 后 dsh 打开它们即 `EACCES` → 插件树加载失败 → 启动失败 → 自愈耗尽 → lifeboat
-  （`@deepseek-ai/dsh-workspace` 属核心 bundle，**web 与 lifeboat 都会加载它，故两者一起死**，
-  表现成"连救生舱都进不去"的无限重启）。
-  entrypoint 的 root 首启块现在会在属主整备之后补一遍**属主可读性归一**
-  （`find <vol> -not -perm -u+r -exec chmod u+rwX {} +`，只碰无 u+r 的条目，
-  `X` 仅对目录/已可执行文件加 x）。失败只告警、绝不阻断启动。
-- **镜像层兜底：原生插件绑定缓存不再依赖 `/tmp` 可执行**。v0.4.6 已在 compose 里给
-  `tmpfs /tmp` 加了 `exec`，但只要使用者沿用旧 compose（真机即如此），`noexec` 仍会让
-  `node-addon-native-custom-loader` 无法 dlopen 复制到 `/tmp` 的 `.node` 绑定，从而
-  第三方插件全部 `ERR_MODULE_NOT_FOUND`。现于 `Dockerfile` 设
-  `ENV NARB_DISABLE_NATIVE_CACHE=1`：绑定改从 `/opt/dsh`（挂载卷，可执行）原路径加载，
-  既不依赖 `/tmp` 可执行、也不额外写盘。`test-compose-wiring.sh` 增加对应门禁。
-- **rescue 快照 hardlink 失败的回退会产出 `node_modules/node_modules` 嵌套**。
-  `cp -al` 失败时会在目标留下**部分创建的目录树**；原代码未清理就回退 `cp -a SRC DST`，
-  而 DST 已存在 → cp 把 SRC 拷**进** DST，产出嵌套目录。真机实测每份快照因此多占约 900MB
-  （`snap-0060`/`snap-0061` 各 1.8G，而正常应为 904M）。现回退前先 `rm -rf` 残留，
-  与 `.dsh-module-fallback` 分支语义一致；同时把 `cp -al` 的 stderr 前两行写进 rescue.log
-  （此前被丢弃，真机排查时无法得知是 EXDEV / EACCES / 配额）。
-
-### Changed
-- **启动时的卷属主整备不再全量 `chown -R`**。真机三卷合计约 **28.8 万个文件**
-  （`/data/dsh` 21.7 万），而 `chown -R` 会对**每个 inode 都发起一次写**——NAS 上每次启动
-  成本很高，且绝大多数文件本来就已归运行用户。改为
-  `find <vol> \( -not -user U -o -not -group G \) -exec chown U:G {} +`：
-  语义等价（该改的一个不漏），已正确的条目只被 stat、不产生写。
-
 ## [Unreleased]
+
+## [v0.4.8-dsh-0.1.6-alpha.1] - 2026-09-17
+
+> 承接 v0.4.7 上线后暴露的**非 root 迁移遗留问题**：HOME 指向不可读的 `/root` 导致
+> pnpm / 插件市场全废，以及 HOME 落在没有可见子目录的位置导致「新建会话选不到工作区」。
+> 镜像 seed 锁定的 DSH 版本仍为 `0.1.6-alpha.1`；本版**不改部署模型**，只把非 root 下的
+> HOME 语义修正为「可读写」且「默认打开就能选到工作区」。
 
 ### Fixed
 - **"选择工作区"列表为空：HOME 不能是没有可见子目录的目录**（真机 2026-09-17）。
@@ -158,6 +69,102 @@
   同步更新：docs 07（中英，`DSH_VERSION`/`PNPM_VERSION` 不再经 compose 生效，仅 `--build-arg`）、
   docs 06（中英，重建容器改用 `docker compose pull && up -d`）；
   `test-compose-wiring.sh` 增加"compose 不得声明 `build:`"门禁（忽略注释行）。
+
+## [v0.4.7-dsh-0.1.6-alpha.1] - 2026-09-17
+
+> 跟随 **v0.4.6 真机上线暴露的三个问题**修复（同一个 NAS 实例连续踩到）。
+> 镜像 seed 锁定的 DSH 版本仍为 `0.1.6-alpha.1`；本版**不改部署模型**，只把
+> 「非 root 迁移」与「tmpfs noexec」两类真实故障在镜像层兜住，使升级不再需要人工
+> 改 compose 或手工 chmod。
+
+### Fixed
+- **非 root 启动的第二个坑：属主无读权限的历史文件**。
+  `chown` 只改属主、**不改权限位**。真机 `/data/dsh` 下有 104 个模式为 `0000` 的
+  文件（`sessions/--*--/session.jsonl.zstd`、`storages/session_projcache/sessions/*.json`，
+  全部来自 09-07~09-10），连属主自己都读不了：以 root 运行时被 `CAP_DAC_OVERRIDE` 掩盖，
+  降权到 uid 1000 后 dsh 打开它们即 `EACCES` → 插件树加载失败 → 启动失败 → 自愈耗尽 → lifeboat
+  （`@deepseek-ai/dsh-workspace` 属核心 bundle，**web 与 lifeboat 都会加载它，故两者一起死**，
+  表现成"连救生舱都进不去"的无限重启）。
+  entrypoint 的 root 首启块现在会在属主整备之后补一遍**属主可读性归一**
+  （`find <vol> -not -perm -u+r -exec chmod u+rwX {} +`，只碰无 u+r 的条目，
+  `X` 仅对目录/已可执行文件加 x）。失败只告警、绝不阻断启动。
+- **镜像层兜底：原生插件绑定缓存不再依赖 `/tmp` 可执行**。v0.4.6 已在 compose 里给
+  `tmpfs /tmp` 加了 `exec`，但只要使用者沿用旧 compose（真机即如此），`noexec` 仍会让
+  `node-addon-native-custom-loader` 无法 dlopen 复制到 `/tmp` 的 `.node` 绑定，从而
+  第三方插件全部 `ERR_MODULE_NOT_FOUND`。现于 `Dockerfile` 设
+  `ENV NARB_DISABLE_NATIVE_CACHE=1`：绑定改从 `/opt/dsh`（挂载卷，可执行）原路径加载，
+  既不依赖 `/tmp` 可执行、也不额外写盘。`test-compose-wiring.sh` 增加对应门禁。
+- **rescue 快照 hardlink 失败的回退会产出 `node_modules/node_modules` 嵌套**。
+  `cp -al` 失败时会在目标留下**部分创建的目录树**；原代码未清理就回退 `cp -a SRC DST`，
+  而 DST 已存在 → cp 把 SRC 拷**进** DST，产出嵌套目录。真机实测每份快照因此多占约 900MB
+  （`snap-0060`/`snap-0061` 各 1.8G，而正常应为 904M）。现回退前先 `rm -rf` 残留，
+  与 `.dsh-module-fallback` 分支语义一致；同时把 `cp -al` 的 stderr 前两行写进 rescue.log
+  （此前被丢弃，真机排查时无法得知是 EXDEV / EACCES / 配额）。
+
+### Changed
+- **启动时的卷属主整备不再全量 `chown -R`**。真机三卷合计约 **28.8 万个文件**
+  （`/data/dsh` 21.7 万），而 `chown -R` 会对**每个 inode 都发起一次写**——NAS 上每次启动
+  成本很高，且绝大多数文件本来就已归运行用户。改为
+  `find <vol> \( -not -user U -o -not -group G \) -exec chown U:G {} +`：
+  语义等价（该改的一个不漏），已正确的条目只被 stat、不产生写。
+
+## [v0.4.6-dsh-0.1.6-alpha.1] - 2026-09-17
+
+> 跟随**容器安全加固**落地（非 root 运行 + capability/只读硬化）。镜像 seed 锁定的 DSH 版本
+> 仍为 `0.1.6-alpha.1`（与 v0.4.5 相同），**部署/升级/entrypoint 安全模型做了实质改动**：容器由
+> root 改为非 root（uid 1000）运行、`cap_drop`+`read_only` 收紧；同时修正
+> `DSH_TRUSTED_HOSTS` 与 dsh-remote 关系的文档口径（装认证插件后无需白名单）。
+
+### Added
+- **容器安全加固：改为非 root 运行 + 收紧 capability/只读**（在 v0.4.5 之上的部署硬化）。
+  - **非 root 运行**：`Dockerfile` 新增 `USER_UID`/`USER_GID`（默认 `1000:1000`），复用镜像自带
+    的 `node` 用户（node:24-slim 内置 uid=1000 gid=1000，无需再 groupadd/useradd）。
+    镜像**不**直接 `USER 1000`，而是保留 root 启动，由 `entrypoint` 首启完成 seed 复制 +
+    把三个挂载卷（`/opt/dsh`、`/data/dsh`、`/workspace`）`chown` 给运行用户后，用
+    `setpriv` 降权到 uid 1000 再运行 socat / 监督循环 / dsh web。常驻进程（dsh、agent、
+    npm/pnpm 升级、rescue 快照/自愈）一律非 root。`docker exec` 仍保留 root 运维通道。
+  - **capability 收敛**：`docker-compose.yml` 启用 `cap_drop: [ALL]` + 最小白名单
+    `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`（仅供首启 chown 挂载卷与 setpriv 降权）。
+  - **只读根 FS**：`read_only: true` + `tmpfs /tmp`（128m）。根 FS 只读后，`NPM_CONFIG_CACHE`
+    由 entrypoint 默认兜底到可写卷 `/opt/dsh/.npm-cache`（`_cacache` 清理仍命中）。
+  - **web profile 固化为 `patchReload: startup`（关闭 HMR）**：`web` 是 dsh 唯一默认
+    `patchReload:"live"`（改 cordis.patch.yml 即时热重载）的 profile；但其 HMR 依赖的 native
+    addon（`node-addon-require-builtin`）在 `read_only` 根 FS 下无可用 binding，启动即抛
+    `--expose-internals is required`，dsh 崩溃且 rescue 无法自愈。`entrypoint` 首启会在 root
+    段把 web profile manifest 改写为 `patchReload: "startup"`（dsh 官方合法值，改配置后
+    `docker restart` 生效，与 acp/headless/sdk 默认一致）。生产加固语义下关闭实时热重载。
+    这是 read_only + dsh 0.1.6-alpha.1 的已知交互，`test-nonroot.sh` 已加对应断言。
+  - 新增 `USER_UID` / `USER_GID` 环境变量（compose 注入，默认 1000:1000）；`.env.example`
+    与 docs/07 速查表登记。
+  - 新增单测 `scripts/t/test-nonroot.sh`（seed 复制 / npm 升级 / rescue 快照+回滚三条链路
+    在非 root 下的可写性 + `cap_drop`/`read_only` 在位）。`test-compose-wiring.sh` 硬化
+    门禁已补 `cap_drop`/`read_only`/`tmpfs` 断言。
+  - **注意（NAS/内核）**：`cap_drop:[ALL]` 搭配部分 NAS 存储后端可能影响卷权限（尤其
+    rescue hardlink 快照的 `cp -al`）。已在本仓库 e2e 沙箱验证通过；部署到目标平台前
+    请先跑 `scripts/t/e2e-container-selftest.sh`。
+
+### Fixed
+- **文档口径修正：`DSH_TRUSTED_HOSTS` 与 dsh-remote 的关系**（2026-09-17 实测溯源）。
+  原文档把"必须加白否则 `/api` 403"写成无条件警告，但装了认证插件 dsh-remote 的部署
+  **不需要**白名单：其 `trustProxy` 在请求通过登录认证后把 Host/Origin 归一为 loopback
+  （`127.0.0.1:3081`）再交给 dsh 核心的 Host 信任围栏，围栏自然放行——实测任意域名/
+  隧道 Host 登录后 `/api` 均 200；未登录请求在 dsh-remote 的 gate 处即被 403。
+  该行为是 dsh-remote 的设计（认证层取代 Host 白名单）。受影响表述已全部修正：
+  `.env.example` 与 `docker-compose.yml` 的注释（"必填"改为"未装 dsh-remote 时必填"）、
+  docs 01/02/04/05（中英同步，02 的"⚠ 必须把域名加进白名单"改为"ℹ 装 dsh-remote 时
+  不需要"）。部署逻辑本身无改动。
+- **`tmpfs /tmp` 必须显式带 `exec`（真机故障修复，2026-09-17）**：Docker 的 tmpfs 默认带
+  `noexec`。dsh 的 **profile 插件解析**依赖原生插件 `node-addon-native-custom-loader`，它会把
+  `node-addon-require-builtin` 的 `.node` 绑定复制到 `$TMPDIR/node-addon-native-custom-loader-<uid>/native-cache/`
+  再 `require()`；在 `noexec` 的 `/tmp` 上该加载以 `failed to map segment from shared object`
+  失败 → 绑定不可用 → `dsh-app-boot` 装不上 profile 解析 hook（`loader.internal` 为空）→
+  **所有第三方插件 `ERR_MODULE_NOT_FOUND`** → web profile 启动失败 → 自愈耗尽 → 进 lifeboat。
+  `docker-compose.yml` 的 tmpfs 已改为 `/tmp:size=128m,exec`；`test-compose-wiring.sh` 增加
+  对应门禁。注意：**空 profile 的 e2e 不会触发此问题**，只有装了插件的部署才会踩到。
+- **修复 CI 红灯：`scripts/t/test-nonroot.sh` 缺可执行位**。仓库 `core.filemode=false`，
+  `git add` 不会记录执行位，导致新脚本以 `100644` 入库；CI 的 `test-script-modes.sh` 断言
+  `scripts/t/*.sh` 必须可执行，检出后即失败（本地因工作区恰好可执行而漏过）。已用
+  `git update-index --chmod=+x` 修正为 `100755`。
 
 ## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
 
