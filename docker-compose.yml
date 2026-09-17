@@ -54,7 +54,9 @@ services:
       # ★ 模型 API 密钥（DSH 从环境变量读取，不落盘；换 key 改 .env 重建即可）
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?请在 .env 中设置 DEEPSEEK_API_KEY}
       # ★ /api Host 信任白名单（dsh 0.1.2 起仅信任 loopback 或白名单 Host）：
-      #   局域网 IP 或隧道域名访问时必须填入，否则页面能开但连接异常（/api 403）。
+      #   未装认证插件 dsh-remote 时，局域网 IP 或隧道域名访问必须填入，否则页面
+      #   能开但连接异常（/api 403）。装了 dsh-remote 则无需填（登录后其 trustProxy
+      #   会把已认证请求的 Host 归一为 loopback）。
       #   逗号分隔，可带端口，如 "192.168.1.5:3080,app.xx.ugdocker.link"
       - DSH_TRUSTED_HOSTS=${DSH_TRUSTED_HOSTS:-}
       # 救生舱（lifeboat）开关：RESCUE=1 时 entrypoint 进救生舱（回退到固定 dsh 版本）

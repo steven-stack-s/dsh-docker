@@ -72,9 +72,9 @@ DSH core does **not** require an admin account to use. On first boot it issues a
 - **First visit**: open `http://<host-ip>:3080/?token=<token-from-log>`
 - **Later visits** (same running instance): the token is no longer needed — open `http://<host-ip>:3080` directly
 
-> If you access from a LAN IP or a domain that is not on dsh's automatic allow-list, add it to `DSH_TRUSTED_HOSTS` in `.env` before starting — otherwise the page opens but every `/api` call returns 403 (see the `.env` comment; dsh 0.1.2 only trusts loopback or allow-listed Hosts).
+> If you access from a LAN IP or a domain that is not on dsh's automatic allow-list, add it to `DSH_TRUSTED_HOSTS` in `.env` before starting — otherwise the page opens but every `/api` call returns 403 (see the `.env` comment; dsh 0.1.2 only trusts loopback or allow-listed Hosts). **Exception**: none of this is needed once the [dsh-remote](https://github.com/xgone/dsh-remote) auth plugin is installed — after login its `trustProxy` normalizes the request Host to loopback, so access control is taken over by the account login (verified: any domain/tunnel Host returns 200 on `/api` after login).
 >
-> Want username/password + MFA for **remote** access? That is the optional [dsh-remote](https://github.com/xgone/dsh-remote) plugin — see [02](02-authentication-remote-access.md). dsh itself needs no account.
+> Want username/password + MFA for **remote** access? That is the [dsh-remote](https://github.com/xgone/dsh-remote) plugin — see [02](02-authentication-remote-access.md). dsh itself needs no account.
 
 ## 5. Verification
 

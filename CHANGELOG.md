@@ -29,6 +29,17 @@
 
 ## [Unreleased]
 
+### Fixed
+- **文档口径修正：`DSH_TRUSTED_HOSTS` 与 dsh-remote 的关系**（2026-09-17 实测溯源）。
+  原文档把"必须加白否则 `/api` 403"写成无条件警告，但装了认证插件 dsh-remote 的部署
+  **不需要**白名单：其 `trustProxy` 在请求通过登录认证后把 Host/Origin 归一为 loopback
+  （`127.0.0.1:3081`）再交给 dsh 核心的 Host 信任围栏，围栏自然放行——实测任意域名/
+  隧道 Host 登录后 `/api` 均 200；未登录请求在 dsh-remote 的 gate 处即被 403。
+  该行为是 dsh-remote 的设计（认证层取代 Host 白名单）。受影响表述已全部修正：
+  `.env.example` 与 `docker-compose.yml` 的注释（"必填"改为"未装 dsh-remote 时必填"）、
+  docs 01/02/04/05（中英同步，02 的"⚠ 必须把域名加进白名单"改为"ℹ 装 dsh-remote 时
+  不需要"）。部署逻辑本身无改动。
+
 ## [v0.4.4-dsh-0.1.6-alpha.1] - 2026-09-15
 
 > 跟进 DSH 预览版：镜像 seed 锁定的 DSH 版本由 `0.1.5-rc.2` 升至 `0.1.6-alpha.1`
