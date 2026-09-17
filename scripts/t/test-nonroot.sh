@@ -58,6 +58,9 @@ grep -q 'chown' "$ENTRY" || fail entrypoint-missing-chown
 grep -q 'RESCUE_PROFILE' "$ENTRY" || fail entrypoint-missing-rescue-profile
 grep -q '"patchReload": "startup"' "$ENTRY" || fail entrypoint-missing-profile-startup
 grep -qE 's/"patchReload".*"live".*"startup"' "$ENTRY" || fail entrypoint-missing-profile-rewrite
+# 属主可读性归一：chown 只改属主不改权限位，历史 0000 文件会让非 root 启动 EACCES
+grep -q -- '-not -perm -u+r' "$ENTRY" || fail entrypoint-missing-perm-normalization
+grep -q 'chmod u+rwX' "$ENTRY" || fail entrypoint-missing-perm-chmod
 
 # ---- 3) Dockerfile：声明非 root 运行用户（复用镜像自带 node 用户 uid=1000），
 #        且没有直接 `USER 1000` 收尾（应保留 root 启动，由 entrypoint 降权后再进运行流程）。

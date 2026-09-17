@@ -87,6 +87,21 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
       || elog "[entrypoint]   WARN chown $v failed (volume may be read-only/root-owned)"
   done
 
+  # ③b 属主可读性归一（真机故障修复 2026-09-17）。
+  #     chown 只改属主、**不改权限位**：历史遗留的 `0000`（或无 u+r）文件即使用户拥有它，
+  #     属主自己也读不了。以 root 运行时被 CAP_DAC_OVERRIDE 掩盖，一旦降权到 uid 1000，
+  #     dsh 打开会话/缓存文件就 EACCES → 插件树加载失败 → 启动失败 → 自愈耗尽 → 进 lifeboat。
+  #     真机实例 /data/dsh 下有 104 个此类文件（sessions/--*--/session.jsonl.zstd、
+  #     storages/session_projcache/sessions/*.json），全部来自 09-07~09-10。
+  #     这里只对"属主无读权限"的条目补 u+rwX（X 仅对目录/已可执行文件加 x，不改文件语义），
+  #     find 是只读元数据遍历，成本远低于上面的 chown（后者要写每个 inode）。
+  #     失败不致命：只告警，绝不因此阻断启动（救命的 lifeboat 必须可达）。
+  elog "[entrypoint]   normalizing owner-readable bits (fixes legacy 0000 files under uid $RUN_USER_ID)"
+  for v in /opt/dsh /data/dsh /workspace; do
+    find "$v" -not -perm -u+r -exec chmod u+rwX {} + 2>/dev/null \
+      || elog "[entrypoint]   WARN permission normalization incomplete for $v"
+  done
+
   # ④ npm 缓存根目录：默认在 /root/.npm 落在只读根 FS 上（read_only:true 时不可写）。
   #    显式把它指到 /opt/dsh 卷内（卷可写），并建好属主，确保 npm install -g 缓存可用、
   #    rescue clean 的 _cacache 清理仍命中。

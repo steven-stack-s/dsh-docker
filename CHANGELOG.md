@@ -65,6 +65,14 @@
 ## [Unreleased]
 
 ### Fixed
+- **非 root 启动的第二个坑：属主无读权限的历史文件（真机故障修复 2026-09-17）**。
+  `chown -R` 只改属主、**不改权限位**。真机 `/data/dsh` 下有 104 个模式为 `0000` 的
+  文件（`sessions/--*--/session.jsonl.zstd`、`storages/session_projcache/sessions/*.json`，
+  全部来自 09-07~09-10），连属主自己都读不了：以 root 运行时被 `CAP_DAC_OVERRIDE` 掩盖，
+  降权到 uid 1000 后 dsh 打开它们即 `EACCES` → 插件树加载失败 → 启动失败 → 自愈耗尽 → lifeboat。
+  entrypoint 的 root 首启块现在会在 chown 之后补一遍**属主可读性归一**
+  （`find <vol> -not -perm -u+r -exec chmod u+rwX {} +`，只碰无 u+r 的条目，
+  `X` 仅对目录/已可执行文件加 x）。失败只告警、绝不阻断启动。
 - **镜像层兜底：原生插件绑定缓存不再依赖 `/tmp` 可执行**。v0.4.6 已在 compose 里给
   `tmpfs /tmp` 加了 `exec`，但只要使用者沿用旧 compose（真机即如此），`noexec` 仍会让
   `node-addon-native-custom-loader` 无法 dlopen 复制到 `/tmp` 的 `.node` 绑定，从而
