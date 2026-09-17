@@ -64,6 +64,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- **镜像层兜底：原生插件绑定缓存不再依赖 `/tmp` 可执行**。v0.4.6 已在 compose 里给
+  `tmpfs /tmp` 加了 `exec`，但只要使用者沿用旧 compose（真机即如此），`noexec` 仍会让
+  `node-addon-native-custom-loader` 无法 dlopen 复制到 `/tmp` 的 `.node` 绑定，从而
+  第三方插件全部 `ERR_MODULE_NOT_FOUND`。现于 `Dockerfile` 设
+  `ENV NARB_DISABLE_NATIVE_CACHE=1`：绑定改从 `/opt/dsh`（挂载卷，可执行）原路径加载，
+  既不依赖 `/tmp` 可执行、也不额外写盘。`test-compose-wiring.sh` 增加对应门禁。
+
 ## [v0.4.5-dsh-0.1.6-alpha.1] - 2026-09-16
 
 > 跟进 `rescue clean` 功能落地（任务 1-7 + 最终广度评审）。镜像 seed 锁定的 DSH 版本

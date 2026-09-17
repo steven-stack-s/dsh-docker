@@ -69,6 +69,18 @@ RUN NPM_CONFIG_PREFIX=/opt/dsh-seed \
 # 数据根目录：DSH 所有用户数据（会话/配置/插件/记忆库）
 ENV DSH_HOME=/data/dsh
 
+# 原生插件绑定缓存必须落在【可执行】文件系统上（真机故障修复 2026-09-17）。
+# node-addon-native-custom-loader（node-addon-require-builtin 的加载器）会把 .node 绑定
+# 复制到 $TMPDIR/node-addon-native-custom-loader-<uid>/native-cache/ 再 dlopen。Docker 的
+# tmpfs（含本仓库 compose 的 /tmp）默认 noexec，dlopen 会以
+#   "failed to map segment from shared object"
+# 失败 → 绑定不可用 → dsh-app-boot 装不上 profile 解析 hook（loader.internal 为空）→
+# 所有第三方插件 ERR_MODULE_NOT_FOUND → web profile 启动失败 → 自愈耗尽 → 进 lifeboat。
+# 这里直接禁用该缓存，让绑定从 /opt/dsh（挂载卷，可执行）原路径加载：
+# 既不依赖 /tmp 可执行，也不额外写盘。Dockerfile 层兜底 + compose 的 tmpfs exec 双保险。
+# （如需保留缓存语义，可改用 NARB_NATIVE_CACHE_DIR 指向卷内可执行目录。）
+ENV NARB_DISABLE_NATIVE_CACHE=1
+
 # 时区（可用 .env 覆盖）
 ENV TZ=Asia/Shanghai
 

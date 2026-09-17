@@ -75,6 +75,9 @@ grep -q 'tmpfs' "$COMPOSE" || fail hardening-missing-tmpfs
 # (node-addon-native-custom-loader) 的 /tmp 绑定缓存无法 dlopen，
 # 进而使 profile 插件解析 hook 缺失、第三方插件全部 MODULE_NOT_FOUND。
 grep -qE '/tmp:size=[0-9]+m,exec' "$COMPOSE" || fail hardening-tmpfs-missing-exec
+# 镜像层兜底：即使使用者的 compose 未给 /tmp 加 exec（或自行换了 tmpfs 配置），
+# 也要禁用原生插件绑定缓存，改从可执行卷原路径加载。
+grep -q 'NARB_DISABLE_NATIVE_CACHE=1' "$ROOT/Dockerfile" || fail dockerfile-missing-narb-native-cache
 grep -q 'setpriv' "$ROOT/scripts/entrypoint.sh" || fail hardening-missing-setpriv-drop
 
 # 3) healthcheck 的 start_period 必须 > RESCUE_START_TIMEOUT（注释里写了的口径不变式）
