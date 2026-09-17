@@ -1,5 +1,10 @@
 # rescue 原生绑定守护 实施计划
 
+> **状态：未采纳（2026-09-17）。** 对应设计 `issues/2026-09-17-rescue-binding-guard.md`
+> 的决策为「暂不实施」——本次故障判为**偶发**（网络 302 + 市场恰在更新 + pnpm 恰在
+> `onnxruntime-node` 处失败），护栏职责属上游 `dshmarket` / DSH。
+> 本计划**未执行任何步骤**，保留供日后复评时直接开工（复评触发条件见该设计 §10）。
+
 > **面向 Agent 执行者：** 必需子技能：使用 superpower-subagent-driven-development（推荐）或 superpower-executing-plans 按任务逐项执行本计划。步骤使用复选框（`- [ ]`）语法进行跟踪。
 
 **目标：** 让 `dsh-docker` 的 rescue 在「可选插件因原生绑定丢失而静默失效」时，既保得住可用回退点（A），又能自动补回缺失的绑定（B）。
@@ -8,7 +13,7 @@
 
 **技术栈：** POSIX sh（`dash` 兼容）、Node.js 24（仅 K 使用）、既有 `scripts/t/test-*.sh` 黑盒测试框架（CI 门禁 1 自动收集）。
 
-**规格：** `docs/superpowers/specs/2026-09-17-rescue-binding-guard-design.md`（计划论证以规格为准；执行者需同时阅读两者）
+**规格：** `issues/2026-09-17-rescue-binding-guard.md`（计划论证以规格为准；执行者需同时阅读两者）
 
 ## 全局约束
 

@@ -1,9 +1,15 @@
 # rescue 原生绑定守护 —— 可选插件静默失效的回退点保护与精准修复
 
-> 状态：待实现
-> 日期：2026-09-17
+> **决策（2026-09-17）：暂不实施。** 本次故障判为**偶发** —— 需「出口网络对 nuget 做 302 重定向」
+> ＋「插件市场恰在该时刻更新」＋「pnpm 恰在 `onnxruntime-node` 处失败」三者同时成立，属低概率组合。
+> 为其在 dsh-docker 侧常驻一套守护逻辑（且落在健康判定链上）不划算；权衡理由与
+> `issues/2026-09-14-market-install-snapshot-plan.md` §10 否掉 market-guard 时一致。
+> **护栏职责宜落在上游**（`dshmarket` / DSH 保证 install 失败后依赖树的一致性），不属本仓库。
+> 本文档保留为**决策记录 + 调查结论**，供日后复评（复评触发条件见 §10）。
+>
+> 状态：仅设计，无代码改动  ·  调查基线：dshmarket 1.47.0 + DSH 0.1.6-alpha.1  ·  2026-09-17
 > 适用镜像：dsh-docker（构建时锁版本 + 容器内升级方案）
-> 关系：**复评并部分推翻** `issues/2026-09-14-market-install-snapshot-plan.md` 的「暂不实施」结论（其自定的复评触发条件已满足，见 §1.3）
+> 关系：本文档原为「复评并部分推翻 09-14 结论」而写（§1.3）；复评后**结论回归不实施**（理由见上）。
 
 ## 1. 背景与问题
 
@@ -362,3 +368,52 @@ rescue_binding_kernel() {
   1. **G3 的"自动发现"**——可选插件静默失效仍不会被探针发现，本设计只保证"有回退点且能自动补"；
   2. **无任何基线可参考**的场景（如首次安装即坏）——需逐包下载源适配；
   3. **绑定存在但 ABI 不符**的场景——清单只判存在性。
+
+## 10. 决策记录（2026-09-17：暂不实施）
+
+**决策：不实施本设计的任何容器侧改动。** 市场安装/更新继续只享受现有的 boot 级兜底
+（`boot-healthy` 基线快照 + 启动自愈）。
+
+**理由**
+
+1. **判为偶发**：本次故障需三个条件同时成立 —— 出口网络对 nuget 做 302 重定向
+   ／ 插件市场恰在该时刻更新 ／ pnpm 恰在 `onnxruntime-node` postinstall 处失败，
+   属低概率组合。为偶发事件常驻守护，与 09-14 §10 否掉 market-guard 的权衡同类。
+2. **成本位置不划算**：方案 B 的触发点在 healthy 判定之后的启动路径旁；方案 A 改的是
+   `rescue_prune_*` 的既有行为。收益是"偶发场景下多一层兜底"，代价是常驻复杂度与
+   判定链风险。
+3. **层次归属**：问题根因是「install 失败后依赖树处于不一致状态」，护栏宜由上游
+   （`dshmarket` / DSH）保证，而非容器侧事后补救。
+4. **"copy 特定文件"手段本身不通用**：即便实施，也只覆盖「`.node` 清单出现差异」这一形态
+   （见 §9 已知不覆盖 1–3）。真要做到通用，应把「依赖树不一致」接进既有自愈链并复用
+   `rescue_restore` 整树回滚 —— 那是另一个量级的设计，更不适合为偶发事件而做。
+   （注：既有 `rescue_pick_rollback_target` 只比 `package.json`+`pnpm-lock.yaml` 指纹，
+   若损坏未改动这两个文件就选不出目标 —— 通用化必须先扩这一判据。）
+
+**复评触发条件（满足其一即值得重新评估）**
+
+- **同类故障再次发生** —— 即"偶发"判断被推翻，这是最强的复评信号；
+- 观察到 `boot-healthy` 基线**反复**被挤出 `RESCUE_KEEP` 窗口（`rescue.log` 持续出现
+  prune 掉 baseline），导致自愈无可回退点；
+- 再次出现「依赖树损坏但 dsh 仍判 healthy」的实例（探测盲区 G3 被二次命中）；
+- `dshmarket` 或 DSH 提供了 install 事务性 / pre-post hook —— 届时护栏可整体不做，
+  只需接钩子。
+
+**可独立复议的最小改动（不随本设计绑定）**
+
+- `rescue_prune_pinned()` 改为钉住「最新 + 最完整」两份基线（§4）：只防止唯一完好基线被
+  挤出窗口，不改 `rescue_prune` 对外语义，也不碰启动链。
+  本次已**实际观察到**这类挤出（`19:20:44 prune /data/dsh/.rescue/snap-0065`，
+  被删的正是含完好绑定的那份），是四条触发条件里最接近满足的一条。
+- 单独复议该最小改动时，只需 §4 的钉住数公式 + §8 用例 1–2，
+  **不需要** K、B、CLI 与文档改动。
+
+**零成本路径（上游建议，成本在上游、对 dsh-docker 用户零维护）**
+
+- `dshmarket`：在 pnpm 命令失败后保证 profile 一致（事务性或完整回滚），或提供 pre/post hook。
+  现场证据：`.dsh-market/log.ndjson` 的 `update-rollback` 明确记
+  "restoration of the previous build could not be verified"，且其 `lib/backup.js` 的
+  `SKIP_NAMES` **设计上排除 `node_modules`**（注释："configuration only, never installed packages"）。
+- `microsoft/onnxruntime`：`js/node/script/install-utils.js` 的 `downloadJson` 用裸
+  `https.get` **不跟随 3xx**（实测 `api.nuget.org` → 302 → `nuget.azure.cn` 即硬失败），
+  且**可选的** CUDA 依赖下载失败会拖垮整个 install。
