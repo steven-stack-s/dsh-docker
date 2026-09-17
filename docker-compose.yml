@@ -42,15 +42,22 @@ services:
     environment:
       # 数据根目录（显式指定，不依赖容器内 HOME）
       - DSH_HOME=/data/dsh
+      # 容器内非 root 运行用户（uid:gid）。默认 1000:1000 = 多数 NAS/宿主首个非 root 用户，
+      # 与 bind mount 目录属主最友好。entrypoint 首启会 chown 三个挂载卷到此用户后降权运行。
+      # 如宿主按特定 uid/gid 建了目录，可在此覆盖（须与 Dockerfile 构建的 USER_UID/USER_GID 一致）。
+      - USER_UID=${USER_UID:-1000}
+      - USER_GID=${USER_GID:-1000}
       # Node 堆上限（按宿主机内存调整；须 << MEM_LIMIT，DSH 多进程 RSS 超堆值，堆过大易被容器 OOM-kill）
       - NODE_OPTIONS=--max-old-space-size=${NODE_MAX_OLD_SPACE:-1024}
       # 时区
       - TZ=${TZ:-Asia/Shanghai}
       # 国内 npm 加速（可选）：首次安装/升级 DSH、装 pnpm 时走国内镜像源
       - NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}
-      # npm/pnpm 下载缓存目录（可选）：留空则自动探测（npm config get cache，通常 /root/.npm）；
-      # 该路径不可写时可显式指向一个可写目录。rescue clean 会清空其中的 _cacache。
-      - NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:-}
+      # npm/pnpm 下载缓存目录。默认指到可写卷 /opt/dsh/.npm-cache（read_only 根 FS 下，
+      # /root/.npm 不可写，会让 docker exec npm install 升级链路 EACCES 失败）。
+      # 该目录由 entrypoint 首启创建并 chown 给运行用户；root(docker exec) 与 node(1000) 均可写。
+      # rescue clean 会清空其中的 _cacache。留空则 entrypoint 兜底到 /opt/dsh/.npm-cache。
+      - NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:-/opt/dsh/.npm-cache}
       # ★ 模型 API 密钥（DSH 从环境变量读取，不落盘；换 key 改 .env 重建即可）
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?请在 .env 中设置 DEEPSEEK_API_KEY}
       # ★ /api Host 信任白名单（dsh 0.1.2 起仅信任 loopback 或白名单 Host）：
@@ -107,10 +114,31 @@ services:
     # 进程数上限：socat 每连接 fork 一个进程，无上限时并发连接可拖垮容器
     pids_limit: ${PIDS_LIMIT:-512}
 
-    # 容器硬化：禁止进程通过 setuid/setgid 提权（LAN 内任何能访问 3080 的人都能借 agent
-    # 以 root 执行，这是低成本的第一道保险）。需要更严格时再按需加：
-    #   cap_drop: [ALL]        # 部分 NAS/内核组合下可能影响卷权限，请先在测试环境验证
-    #   read_only: true        # 需同时挂 tmpfs 到 /tmp
+    # 容器硬化（安全加固升级）：
+    #   - no-new-privileges：禁止进程通过 setuid/setgid 提权（低层面保险）
+    #   - read_only:true：根文件系统只读 —— dsh/agent/第三方插件无法在镜像层落盘或篡改
+    #   - cap_drop:[ALL] + 最小 cap_add 白名单：容器进程几乎无 root capability
+    #   - tmpfs /tmp：read_only 后唯一需要写盘的系统目录（mktemp/npm 构建临时等）
+    # --------------------------------------------
+    # 【为何保留 4 个 cap】非 root 运行链路需要：
+    #   CHOWN / DAC_OVERRIDE  → entrypoint 首启把挂载卷 chown 给运行用户 node(1000)
+    #   SETUID / SETGID       → setpriv 降权（root→1000）时设置 uid/gid
+    # 这些能力只有首启那几毫秒用得到；运行期 dsh/agent 进程（已是 uid 1000）不具备它们。
+    # --------------------------------------------
+    # 【NAS / 内核组合注意】`cap_drop:[ALL]` 搭配部分 NAS 内核（尤其 bind mount 到
+    # NFS/eCryptfs/某些存储池）时，可能影响卷内文件权限/硬链接（rescue 快照 hardlink
+    # 模式用 cp -al）。已在本仓库 e2e 沙箱验证通过；部署到目标 NAS 前请先跑一次
+    # `scripts/t/e2e-container-selftest.sh` 确认卷权限与 rescue 链路正常。
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
 

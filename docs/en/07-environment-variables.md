@@ -55,6 +55,39 @@ system only diagnoses and writes incidents.
 
 ---
 
+## 2.5 Security hardening (non-root run / capability / read-only)
+
+Since v0.4.6 the image runs as a **non-root** user and tightens capabilities + read-only root FS:
+
+- **Run user**: the in-image `node` user (uid 1000 gid 1000). The entrypoint first runs as root to seed
+  `/opt/dsh` and `chown` the three mounted volumes to the run user, then uses `setpriv` to drop to
+  uid 1000 before running dsh / socat / upgrades / rescue. Persistent in-container processes are **not root**.
+- **`USER_UID` / `USER_GID`**: override the non-root run user (default `1000`). Most NAS / host
+  first non-root user is `1000`, matching the volume ownership; if the host created dirs with a
+  specific uid (e.g. `1024`), set these to match (must equal the Dockerfile build args).
+- **Capability convergence** (`docker-compose.yml`): `cap_drop: [ALL]` + minimal allowlist
+  `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`. These four are only needed for first-boot
+  `chown` of the volumes and `setpriv` uid drop; runtime dsh/agent processes (uid 1000) lack them.
+- **Read-only root FS**: `read_only: true` + `tmpfs /tmp` (128m). Only volumes and /tmp are writable.
+  `NPM_CONFIG_CACHE` defaults to `/opt/dsh/.npm-cache` (inside a writable volume, created and `chown`ed
+  to the run user on first boot; usable by both root `docker exec npm` and the node user) so
+  `npm install -g` upgrades and rescue cleaning still work.
+- **Web profile forced to `patchReload: startup`**: `web` is the only dsh profile that defaults to
+  `patchReload:"live"` (hot-reload of `cordis.patch.yml`). Its HMR relies on a native addon
+  (`node-addon-require-builtin`) that has no usable binding under a read-only root FS, so it throws
+  `--expose-internals is required` on startup and dsh crashes. The entrypoint rewrites the web profile
+  to `startup` on first boot (an official dsh value; config changes take effect on `docker restart`,
+  no live hot-reload, matching acp/headless/sdk defaults). If you truly need live hot-reload in
+  production, disable `read_only` instead.
+- **NAS / kernel caveat**: `cap_drop:[ALL]` may affect in-volume permissions and hard links
+  (rescue snapshot `hardlink` uses `cp -al`) on some NAS storage backends (NFS / certain storage pools).
+  Verified in this repo's e2e sandbox; before deploying to a target platform, run
+  `scripts/t/e2e-container-selftest.sh` to confirm volume permissions and the rescue chain.
+- These hardenings are not toggleable (default security posture); edit `docker-compose.yml` manually
+  for looser behavior.
+
+---
+
 ## 3. Build & image
 
 | Variable | Default | Meaning |
@@ -70,7 +103,7 @@ system only diagnoses and writes incidents.
 | Variable | Default | Meaning |
 |---|---|---|
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | npm/pnpm registry used inside the container (for initial install, dsh upgrades, pnpm install). Keep the default in CN; switch to `https://registry.npmjs.org` for deployments outside CN. |
-| `NPM_CONFIG_CACHE` | (empty; auto-detected) | npm/pnpm download cache directory inside the container. When empty, the result of `npm config get cache` is used (usually `/root/.npm`). The cleanup command (`rescue clean`) empties the `_cacache` inside it. Point it at a mounted volume if that path is not writable. |
+| `NPM_CONFIG_CACHE` | `/opt/dsh/.npm-cache` | npm/pnpm download cache directory inside the container. Defaults to a writable dir inside a mounted volume (under a read-only root FS `/root/.npm` is unwritable and would break upgrades); override only to another writable path. The cleanup command (`rescue clean`) empties the `_cacache` inside it. |
 
 ---
 

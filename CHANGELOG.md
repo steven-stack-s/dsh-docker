@@ -29,6 +29,34 @@
 
 ## [Unreleased]
 
+### Added
+- **容器安全加固：改为非 root 运行 + 收紧 capability/只读**（在 v0.4.5 之上的部署硬化）。
+  - **非 root 运行**：`Dockerfile` 新增 `USER_UID`/`USER_GID`（默认 `1000:1000`），复用镜像自带
+    的 `node` 用户（node:24-slim 内置 uid=1000 gid=1000，无需再 groupadd/useradd）。
+    镜像**不**直接 `USER 1000`，而是保留 root 启动，由 `entrypoint` 首启完成 seed 复制 +
+    把三个挂载卷（`/opt/dsh`、`/data/dsh`、`/workspace`）`chown` 给运行用户后，用
+    `setpriv` 降权到 uid 1000 再运行 socat / 监督循环 / dsh web。常驻进程（dsh、agent、
+    npm/pnpm 升级、rescue 快照/自愈）一律非 root。`docker exec` 仍保留 root 运维通道。
+  - **capability 收敛**：`docker-compose.yml` 启用 `cap_drop: [ALL]` + 最小白名单
+    `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`（仅供首启 chown 挂载卷与 setpriv 降权）。
+  - **只读根 FS**：`read_only: true` + `tmpfs /tmp`（128m）。根 FS 只读后，`NPM_CONFIG_CACHE`
+    由 entrypoint 默认兜底到可写卷 `$PROGRAMS_DIR/.npm-cache`（`_cacache` 清理仍命中）。
+  - **web profile 固化为 `patchReload: startup`（关闭 HMR）**：`web` 是 dsh 唯一默认
+    `patchReload:"live"`（改 cordis.patch.yml 即时热重载）的 profile；但其 HMR 依赖的 native
+    addon（`node-addon-require-builtin`）在 `read_only` 根 FS 下无可用 binding，启动即抛
+    `--expose-internals is required`，dsh 崩溃且 rescue 无法自愈。`entrypoint` 首启会在 root
+    段把 web profile manifest 改写为 `patchReload: "startup"`（dsh 官方合法值，改配置后
+    `docker restart` 生效，与 acp/headless/sdk 默认一致）。生产加固语义下关闭实时热重载。
+    这是 read_only + dsh 0.1.6-alpha.1 的已知交互，`test-nonroot.sh` 已加对应断言。
+  - 新增 `USER_UID` / `USER_GID` 环境变量（compose 注入，默认 1000:1000）；`.env.example`
+    与 docs/07 速查表登记。
+  - 新增单测 `scripts/t/test-nonroot.sh`（seed 复制 / npm 升级 / rescue 快照+回滚三条链路
+    在非 root 下的可写性 + `cap_drop`/`read_only` 在位）。`test-compose-wiring.sh` 硬化
+    门禁已补 `cap_drop`/`read_only`/`tmpfs` 断言。
+  - **注意（NAS/内核）**：`cap_drop:[ALL]` 搭配部分 NAS 存储后端可能影响卷权限（尤其
+    rescue hardlink 快照的 `cp -al`）。已在本仓库 e2e 沙箱验证通过；部署到目标平台前
+    请先跑 `scripts/t/e2e-container-selftest.sh`。
+
 ### Fixed
 - **文档口径修正：`DSH_TRUSTED_HOSTS` 与 dsh-remote 的关系**（2026-09-17 实测溯源）。
   原文档把"必须加白否则 `/api` 403"写成无条件警告，但装了认证插件 dsh-remote 的部署

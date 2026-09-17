@@ -109,6 +109,13 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 - `DEEPSEEK_API_KEY` lives only in `.env` (ignored by `.gitignore`) — never commit it.
 - Do not expose port `3080` directly to the public internet; for remote access, add authentication + a reverse proxy (see [docs/en/02-authentication-remote-access.md](docs/en/02-authentication-remote-access.md)).
 - Back up the whole deployment directory regularly.
+- **Default security posture** (since v0.4.6): the container runs as a **non-root** `node` user
+  (uid 1000, the entrypoint chowns the volumes on first boot, then `setpriv` drops privileges),
+  with `cap_drop:[ALL]` (4 minimal caps kept), a read-only root FS (`read_only` + `tmpfs /tmp`) and
+  `no-new-privileges`. The web process and plugins no longer run as root. Because the web profile's
+  HMR relies on a native addon that is unavailable under a read-only root FS, it is set to
+  `patchReload: startup` (config changes take effect on `docker restart`, no live hot-reload).
+  See the "Security hardening" section in [docs/en/07-environment-variables.md](docs/en/07-environment-variables.md).
 ---
 
 ## 🏷️ Releases
