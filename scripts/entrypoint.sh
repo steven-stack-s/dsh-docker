@@ -17,39 +17,130 @@ elog() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 # 显式赋值是为了不再依赖"librescue 恰好也设置了它"这种隐式耦合。
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-if ! command -v dsh >/dev/null 2>&1; then
-  elog "[entrypoint] first boot: seeding @deepseek-ai/dsh into mounted volume /opt/dsh ..."
-  if [ -x /opt/dsh-seed/bin/dsh ]; then
-    # 从镜像内 seed 复制：离线、版本固定、秒级完成
-    elog "[entrypoint]   copying in-image seed (/opt/dsh-seed) to /opt/dsh"
-    mkdir -p /opt/dsh
-    cp -a /opt/dsh-seed/. /opt/dsh/
-    # 保留 /opt/dsh-seed：它位于镜像只读层，rm 无法释放镜像空间，且保留可让 rescue dsh-reinstall
-    # 在主程序(/opt/dsh 卷)损坏且离线时从 seed 恢复（镜像版本）。重建容器也会重新可见。
-  else
-    # 兜底：seed 不存在（极少见，如手动精简镜像）时联网安装
-    elog "[entrypoint]   seed missing; falling back to online npm install"
-    if [ -n "$NPM_REGISTRY" ]; then
-      npm install -g @deepseek-ai/dsh --registry="$NPM_REGISTRY"
+# ----------------------------------------------------------------------------
+# 首启 root 初始化 + 非 root 降权（容器安全加固第 2 步）
+#
+# 本文件被两类方式调用：
+#   A) docker 以 root 启动本镜像（镜像无 USER 指令）→ 先做 seed 复制 + 挂载卷属主
+#      整备，再 setpriv 降权到 node 用户（uid 1000，镜像自带）重新 exec 本脚本继续走监督/socat；
+#   B) 降权后再次进入本脚本（uid!=0）→ 跳过本 root 块，直接运行 socat / dsh。
+#
+# 为何不直接在镜像里 `USER 1000`：
+#   - seed 复制要写宿主 bind mount 的 /opt/dsh（卷可能 root 属主，非 root 无写权）；
+#   - 三个挂载卷（/opt/dsh、/data/dsh、/workspace）属主需 chown 给运行用户，
+#     只有 root（CAP_CHOWN / DAC_OVERRIDE）能做。
+# 故采用「root 启动 → 首启特权整备 → setpriv 降权」模型：常驻进程（dsh/agent/npm/rescue）
+# 一律非 root 运行，仅保留最开头的特权初始化。
+# ============================================================================
+RUN_USER_ID="${USER_UID:-1000}"
+RUN_GROUP_ID="${USER_GID:-1000}"
+# 运行 profile（默认 web）。须在 root 首启块之前定义：首启块要据它改写 profile manifest
+RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
+
+if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ]; then
+  elog "[entrypoint] root first-boot: preparing seed + volume ownership, then dropping to uid $RUN_USER_ID"
+
+  # ① 首启：把镜像内 /opt/dsh-seed 复制到挂载卷 /opt/dsh
+  if ! command -v dsh >/dev/null 2>&1; then
+    elog "[entrypoint]   seeding @deepseek-ai/dsh into mounted volume /opt/dsh ..."
+    if [ -x /opt/dsh-seed/bin/dsh ]; then
+      # 从镜像内 seed 复制：离线、版本固定、秒级完成
+      elog "[entrypoint]   copying in-image seed (/opt/dsh-seed) to /opt/dsh"
+      mkdir -p /opt/dsh
+      cp -a /opt/dsh-seed/. /opt/dsh/
+      # 保留 /opt/dsh-seed：它位于镜像只读层，rm 无法释放镜像空间，且保留可让 rescue dsh-reinstall
+      # 在主程序(/opt/dsh 卷)损坏且离线时从 seed 恢复（镜像版本）。重建容器也会重新可见。
     else
-      npm install -g @deepseek-ai/dsh
+      # 兜底：seed 不存在（极少见，如手动精简镜像）时联网安装
+      elog "[entrypoint]   seed missing; falling back to online npm install"
+      if [ -n "$NPM_REGISTRY" ]; then
+        npm install -g @deepseek-ai/dsh --registry="$NPM_REGISTRY"
+      else
+        npm install -g @deepseek-ai/dsh
+      fi
+    fi
+    elog "[entrypoint] dsh ready: $(command -v dsh)"
+  fi
+
+  # ② pnpm：dsh plugin 命令（插件管理）转发到 pnpm 执行，必须可用
+  if ! command -v pnpm >/dev/null 2>&1; then
+    elog "[entrypoint]   preparing pnpm (required for plugin management) ..."
+    if [ -x /opt/dsh-seed/bin/pnpm ]; then
+      # dsh 段已复制过 seed 的话 pnpm 应已就位；这里兜底单独复制
+      mkdir -p /opt/dsh
+      cp -a /opt/dsh-seed/. /opt/dsh/
+    elif [ -n "$NPM_REGISTRY" ]; then
+      npm install -g pnpm --registry="$NPM_REGISTRY"
+    else
+      npm install -g pnpm
     fi
   fi
-  elog "[entrypoint] dsh ready: $(command -v dsh)"
-fi
 
-# pnpm：dsh plugin 命令（插件管理）转发到 pnpm 执行，必须可用
-if ! command -v pnpm >/dev/null 2>&1; then
-  elog "[entrypoint] preparing pnpm (required for plugin management) ..."
-  if [ -x /opt/dsh-seed/bin/pnpm ]; then
-    # dsh 段已复制过 seed 的话 pnpm 应已就位；这里兜底单独复制
-    mkdir -p /opt/dsh
-    cp -a /opt/dsh-seed/. /opt/dsh/
-  elif [ -n "$NPM_REGISTRY" ]; then
-    npm install -g pnpm --registry="$NPM_REGISTRY"
-  else
-    npm install -g pnpm
+  # ③ 挂载卷属主整备：把三个持久化卷 chown 给运行用户（bridge 了宿主机目录属主差异）
+  #    非 root 后 dsh/npm/rescue 都要在卷上读写，属主必须归 dsh。
+  #    chown 失败不致命（只告警后继续，属主不符可能导致运行期写失败）。宿主机目录
+  #    若原本已归目标用户（多数 NAS 首用户即 1000），chown 是 no-op。
+  elog "[entrypoint]   fixing ownership of mounted volumes to $RUN_USER_ID:$RUN_GROUP_ID"
+  for v in /opt/dsh /data/dsh /workspace; do
+    mkdir -p "$v"
+    chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$v" \
+      || elog "[entrypoint]   WARN chown $v failed (volume may be read-only/root-owned)"
+  done
+
+  # ④ npm 缓存根目录：默认在 /root/.npm 落在只读根 FS 上（read_only:true 时不可写）。
+  #    显式把它指到 /opt/dsh 卷内（卷可写），并建好属主，确保 npm install -g 缓存可用、
+  #    rescue clean 的 _cacache 清理仍命中。
+  if [ -z "${NPM_CONFIG_CACHE:-}" ]; then
+    NPM_CONFIG_CACHE=/opt/dsh/.npm-cache
+    export NPM_CONFIG_CACHE
+    elog "[entrypoint]   NPM_CONFIG_CACHE not set -> defaulting to $NPM_CONFIG_CACHE (writable volume)"
   fi
+  mkdir -p "$NPM_CONFIG_CACHE"
+  chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$NPM_CONFIG_CACHE" 2>/dev/null || true
+
+  # ⑤ 固定 web profile 为 patchReload=startup(关闭 HMR,read_only 安全)。
+  #    web 是 dsh 唯一默认 patchReload:"live"(改 cordis.patch.yml 即时热重载)的 profile;
+  #    但 read_only 根 FS 下 HMR 依赖的 native addon(node-addon-require-builtin)无法解析
+  #    binding,导致 HMR 插件启动即抛 --expose-internals is required,dsh 崩溃且 rescue 无法自愈。
+  #    read_only 生产加固应关闭实时热重载(改配置后 docker restart 生效),与 acp/headless/sdk
+  #    等默认 startup 一致。dsh 的 initProfile 仅在 manifest 不存在时创建、normalizeShippedProfile
+  #    保留已有显式值 -> 此处预置或改写均会被 dsh 沿用。
+  if [ -n "$RESCUE_PROFILE" ]; then
+    pf="/data/dsh/profiles/$RESCUE_PROFILE/package.json"
+    case "$RESCUE_PROFILE" in
+      web)
+        if [ -e "$pf" ]; then
+          sed -i 's/"patchReload"[[:space:]]*:[[:space:]]*"live"/"patchReload": "startup"/' "$pf" 2>/dev/null \
+            || elog "[entrypoint]   WARN failed to rewrite web profile patchReload"
+        else
+          mkdir -p "/data/dsh/profiles/web"
+          cat > "$pf" <<'PPF'
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+      "patchReload": "startup"
+    }
+  }
+}
+PPF
+        fi
+        # profile 目录(含父级 profiles + 新落盘的 manifest + dsh 首启将创建的 node_modules/lifeboat)
+        # 归运行用户。必须 chown 整个 /data/dsh/profiles:仅 chown web 子目录会使父级 profiles
+        # 保持 root 属主,dsh 首启 mkdir profiles/node_modules 时 uid 1000 会 EACCES。
+        chown -R "$RUN_USER_ID:$RUN_GROUP_ID" /data/dsh/profiles 2>/dev/null || true
+        elog "[entrypoint]   web profile patchReload -> startup (HMR off, read-only safe)"
+        ;;
+    esac
+  fi
+
+  # ⑥ 降权并重新 exec 本脚本。DSH_INIT_DONE 防止二次进入时再走本块。
+  export DSH_INIT_DONE=1
+  elog "[entrypoint] dropping privileges to uid=$RUN_USER_ID gid=$RUN_GROUP_ID"
+  exec setpriv --reuid="$RUN_USER_ID" --regid="$RUN_GROUP_ID" --init-groups "$0" "$@"
 fi
 
 # dsh web 刻意只监听 127.0.0.1（--host 0.0.0.0 被安全拒绝）。
@@ -133,7 +224,6 @@ fi
 
 RESCUE_START_TIMEOUT="${RESCUE_START_TIMEOUT:-120}"
 RESCUE_AUTO="${RESCUE_AUTO:-on}"
-RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
 # rescue-diagnose 行为开关与限额（红线：绝不改 cordis.patch.yml / 会话 / 记忆 / 配置 / 凭据）
 RESCUE_SELFHEAL="${RESCUE_SELFHEAL:-on}"

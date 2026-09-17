@@ -72,6 +72,26 @@ ENV DSH_HOME=/data/dsh
 # 时区（可用 .env 覆盖）
 ENV TZ=Asia/Shanghai
 
+# ============================================================================
+# 非 root 运行用户（容器安全加固）
+#
+# 【运行模型】root 启动 → 首启初始化 → setpriv 降权
+#   - 镜像**不设** `USER 1000`：entrypoint 仍需以 root 完成两类特权操作，
+#        ① 首启把镜像内 /opt/dsh-seed 复制进宿主 bind mount 的 /opt/dsh（卷可能 root 属主）；
+#        ② 把三个挂载卷（/opt/dsh、/data/dsh、/workspace）chown 给运行用户。
+#   - 初始化完成后，entrypoint 用 `setpriv --reuid=1000 --regid=1000 --init-groups`
+#     降权到 node 用户（uid 1000），再启动 socat / 监督循环 / dsh web。dsh 及全部子进程
+#     （agent、npm/pnpm 升级、rescue 快照/自愈）都以 uid 1000 运行，非 root。
+#   - 保留 docker exec 的 root 运维通道（升级、修复脚本），但容器常驻进程非 root。
+# 【运行用户】直接复用 node:24-slim 镜像自带的 `node` 用户：uid=1000 gid=1000。
+#   它天然契合"uid 1000:1000 = 多数 NAS/宿主首个非 root 用户"，对 bind mount 属主最友好；
+#   且无需新建用户（node 镜像已自带）。entrypoint 用 setpriv 降权到 uid 1000 运行。
+# 【USER_UID/USER_GID】如需按宿主覆盖 uid/gid，可经 build-arg + 环境变量传入；
+#   默认保持 1000:1000（与 node 用户一致）。注意：若改成非 1000，需宿主目录属主匹配。
+# ============================================================================
+ARG USER_UID=1000
+ARG USER_GID=1000
+
 WORKDIR /workspace
 EXPOSE 3080
 
