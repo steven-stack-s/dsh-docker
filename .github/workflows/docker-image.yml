@@ -100,6 +100,10 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: sh scripts/ci-image-tags.sh >> "$GITHUB_OUTPUT"
 
+      # ---- 诊断：build 开始时戳个时间戳，供末尾的 summary 步骤算总耗时 ----
+      - name: Mark build start
+        run: date -u +%s > /tmp/build_start_epoch
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -114,8 +118,16 @@ jobs:
             org.opencontainers.image.dsh-version=${{ steps.meta.outputs.dsh_version }}
           # 缓存只对 tag 构建启用：分支构建的 DSH_VERSION 恒为字符串 "latest"，若复用缓存，
           # npm install -g @deepseek-ai/dsh@latest 那一层会命中旧缓存、不再跟随 npm 上的最新版本。
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # no-cache 在 【分支构建】 才为 true；tag 构建（github.ref_type == 'tag'）永远 false → 缓存生效。
+          #
+          # 【跨 tag 缓存复用】gha 缓存默认 scope 是当前 ref（每个 tag 各自隔离），于是 v0.4.x 与
+          # v0.4.(x+1) 之间底层（apt 装包、node 基础、rescue 工具、entrypoint）无法复用，
+          # 每次发版都从零重建这些与 DSH_VERSION 无关的层。这里给 cache-from/cache-to 统一固定一个
+          # scope=base 的命名空间：所有 tag 构建读写同一份 GHA 缓存。Docker/Buildkit 的缓存 key 是
+          # 各层内容哈希，内部自组织 —— 不同 DSH_VERSION 的 npm 层会以不同 key 共存，**不存在
+          # 互相覆盖污染**。只有 DSH_VERSION=latest 的分支构建不上缓存（已在 no-cache 排除）。
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
           no-cache: ${{ github.ref_type != 'tag' }}
 
       # ---- 发布：tag 构建成功后自动创建 GitHub Release（notes 取自 CHANGELOG 对应段落）----
@@ -194,3 +206,30 @@ jobs:
           # [skip ci] 与上面的 paths-ignore 是双保险：确保这次纯文档提交不会触发任何 CI
           git commit -m "docs: 同步 DSH 版本徽章至 ${DSH_VERSION} [skip ci]"
           git push origin main
+
+      # ---- 诊断：记录 build & push 墙钟耗时，便于对比发版快慢 ----
+      # build-push-action 是一个单 step，内部哪一段慢要看原生日志；这里在 status 处把
+      # 「整个 build & push」的总耗时写进 Job Summary，作为下次优化的基线。
+      - name: Publish build timing summary
+        if: always()
+        env:
+          REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          # 无 start 标记（例如分支保护下 build 前的标记步骤被跳过）时不报错，仅提示
+          START="$(cat /tmp/build_start_epoch 2>/dev/null || echo 0)"
+          END="$(date -u +%s)"
+          if [ "$START" -gt 0 ] && [ "$END" -gt "$START" ]; then
+            ELAPSED=$(( END - START ))
+            echo "## Build & push 耗时: ${ELAPSED}s" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Build 耗时: 未能测量（start 标记缺失）" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo ""
+            echo "- ref: \`$REF\` (\`$REF_TYPE\`)"
+            echo "- run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+            echo "> 该数字覆盖 build & push 步骤的墙钟耗时，用于不同发版间的相对快慢对比。"
+            echo "> 更细的原生 stage 请展开对应 step 日志查看，或直接看 GitHub 自带的 step timing。"
+          } >> "$GITHUB_STEP_SUMMARY"
