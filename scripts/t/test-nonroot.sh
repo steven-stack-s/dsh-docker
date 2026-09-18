@@ -50,14 +50,14 @@ for v in /opt/dsh /data/dsh /workspace; do
 done
 grep -q 'NPM_CONFIG_CACHE' "$ENTRY" || fail entrypoint-missing-npm-cache
 grep -q 'chown' "$ENTRY" || fail entrypoint-missing-chown
-# read_only 下 web profile 必须固化为 patchReload=startup(关闭 HMR):
-# web 是 dsh 唯一默认 patchReload:"live" 的 profile,其 HMR 依赖的 native addon
-# (node-addon-require-builtin)在 read_only 根 FS 下无可用 binding,启动即抛
-# "--expose-internals is required",dsh 崩溃且 rescue 无法自愈。startup 为官方合法值,
-# 改配置后 docker restart 生效(生产加固语义)。acp/headless/sdk 本就默认 startup。
+# read_only 下必须关闭 profile 的 HMR。关闭手段在 2026-09-18（升 DSH 0.1.6-alpha.2）已换代：
+# 从"改 profile manifest 的 patchReload 字段"改为"启动时注入 --patch 叠加层"。原因见
+# scripts/hmr-off.yml 与 test-hmr-off.sh —— alpha.2 删除了 patchReload，旧做法会退化成
+# 没人读取的死写入（HMR 实际仍开着），而旧门禁只 grep 那行文本、照样全绿。
+# 这里只做存在性检查，完整断言（每条启动路径都注入 / 镜像携带叠加层 / 叠加层真的禁用）在
+# scripts/t/test-hmr-off.sh。
 grep -q 'RESCUE_PROFILE' "$ENTRY" || fail entrypoint-missing-rescue-profile
-grep -q '"patchReload": "startup"' "$ENTRY" || fail entrypoint-missing-profile-startup
-grep -qE 's/"patchReload".*"live".*"startup"' "$ENTRY" || fail entrypoint-missing-profile-rewrite
+grep -q 'HMR_OFF_PATCH' "$ENTRY" || fail entrypoint-missing-hmr-off-injection
 # 属主可读性归一：chown 只改属主不改权限位，历史 0000 文件会让非 root 启动 EACCES
 grep -q -- '-not -perm -u+r' "$ENTRY" || fail entrypoint-missing-perm-normalization
 grep -q 'chmod u+rwX' "$ENTRY" || fail entrypoint-missing-perm-chmod

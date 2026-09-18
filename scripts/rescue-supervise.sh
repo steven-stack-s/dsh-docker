@@ -15,6 +15,11 @@
 # 在函数内做全部状态初始化后进入监督循环，永不以 return 结束（内部 exec/exit）。
 # ============================================================================
 
+# HMR_OFF_PATCH 由 entrypoint 解析（关闭 HMR 的 --patch 参数，见 scripts/hmr-off.yml）。
+# 本文件声明须兼容 set -u，故对"调用方未提供"的空值兜底：否则独立 source（单测、精简
+# 镜像里的降级路径）会在 set -u 下以 "parameter not set" 直接终止监督循环。
+HMR_OFF_PATCH="${HMR_OFF_PATCH:-}"
+
 # ===== 归因自愈辅助（规范 §6；本环境仅静态校验，真机行为以宿主机 e2e 为准）=====
 # 注意：rescue_ts / rescue_budget_read / rescue_budget_write 现由 librescue.sh 提供
 # （CLI 的 `rescue selfheal status|reset` 也要用同一份预算逻辑，不能再有第二份实现）。
@@ -56,10 +61,10 @@ rescue_start_child() {
     fi
   fi
   if [ -n "$EVLOG" ]; then
-    ( exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS >&3 2>&1 ) &
+    ( exec dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS >&3 2>&1 ) &
     child=$!
   else
-    dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS &
+    dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS &
     child=$!
   fi
 }
@@ -284,7 +289,7 @@ rescue_supervise() {
   # 时无法监督 -> 降级为原始前台 exec，保证慢启动的健康 dsh 不被误杀。
   if [ ! -f "$probe" ]; then
     elog '[entrypoint] probe-ready.js missing; supervision disabled - exec dsh directly'
-    exec dsh --profile "$RESCUE_PROFILE" --port $PORT_INNER --no-open $TRUSTED_ARGS
+    exec dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS
   fi
   # ---- 状态初始化（归因自愈用；本文件由 entrypoint 监督循环 source，须兼容 set -u）----
   EVLOG=''; child=''; tee_pid=''; DIAG_JSON=''

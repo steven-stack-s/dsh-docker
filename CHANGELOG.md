@@ -6,6 +6,66 @@
 
 ## [Unreleased]
 
+## [v0.4.9-dsh-0.1.6-alpha.2] - 2026-09-18
+
+> 镜像 seed 锁定的 DSH 版本由 `0.1.6-alpha.1` 升到 `0.1.6-alpha.2`。这**不是**一次
+> 纯版本号递增：alpha.2 把 HMR 机制整体换代（`@deepseek-ai/cordis-plugin-hmr` →
+> 新包 `@deepseek-ai/dsh-hmr`，并**删除** profile manifest 的 `patchReload` 字段），
+> 使本项目"首启改写 `patchReload` 来关闭 HMR"的 read_only 加固**静默失效**——而当时的
+> 门禁只 grep entrypoint 里的那行文本，**照样全绿**。本版把关闭手段换成与 dsh 版本无关的
+> 启动参数叠加层，并补上能真正抓住这类"保护蒸发"的门禁。
+> 部署模型、挂载与数据格式**均未变化**，升级后无需改 `.env`。
+
+### Fixed
+- **read_only 加固静默失效：关闭 HMR 的手段换代为启动参数叠加层**（DSH 0.1.6-alpha.2 适配，实测）。
+  旧做法是首启把 web profile manifest 的 `patchReload` 由 `"live"` 改写成 `"startup"`。
+  实测 alpha.2：**该字段已被完全移除** —— `dsh-app-boot` 源码里再无任何引用，新建 profile 也
+  不再写入它，存量 profile 上它被**静默忽略**（带该字段仍能启动、不报错）。与此同时 HMR 改由
+  base 组合包的 `hmr` 条目控制：
+  ```yaml
+  # alpha.1：- id: hmr / name: '@deepseek-ai/cordis-plugin-hmr' / disabled: true   ← 默认关（opt-in）
+  # alpha.2：- id: hmr / name: '@deepseek-ai/dsh-hmr' / disabled: !!js "!ctx.get('profileContext')"
+  ```
+  即**只要由启动器拉起（web/headless/sdk/acp 都算）就默认启用** —— web 的配置热重载实际变成
+  开着，而 read_only 根 FS 下 HMR 需要的 `ctx.loader.internal` 可能缺席，`dsh-hmr` 会直接抛
+  `Error: --expose-internals is required for HMR service` 让 dsh 崩溃。
+  现改为 entrypoint 在**每条启动命令**上注入 `--patch /opt/dsh-rescue/hmr-off.yml`
+  （新增 `scripts/hmr-off.yml`，只关 `hmr` 条目），既不碰 profile manifest、也不碰用户的
+  `cordis.patch.yml`。选启动参数而非 manifest 字段的理由：`--patch` 在 `0.1.5-rc.2` /
+  `0.1.6-alpha.1` / `0.1.6-alpha.2` 上**都存在**（已逐一实测），故容器内 `npm install -g`
+  升级或回退 dsh 都不会让它失效 —— 而"写进 manifest 的字段"是随版本被删的，正是本次翻车的原因。
+  覆盖范围经数量断言：entrypoint 2 条 + supervise 3 条启动路径**全部**注入（漏一条即红灯）。
+
+- **`test-rescue-clean.sh`：dry-run 指纹用例在 tmpfs 上必然假红**（既有缺陷，与本次升级无关，
+  经基线 worktree 对照确认）。该用例把 `fp.before`/`fp.after` 写在**被指纹的目录自身**里，
+  而指纹含目录自身的 `%s`：tmpfs 的目录 size 随条目数增长（实测 40→60→80），于是 dry-run 明明
+  毫无副作用，`.` 的 size 却从 100 变成 120 而报错；ext4 上目录 size 恒为 4096，所以 **CI 常年
+  绿、本地沙箱常年红**。指纹文件改落 `$T`（被指纹目录之外）。
+
+### Added
+- `scripts/hmr-off.yml`：关闭 profile `hmr` 条目的 launcher 叠加层，由 entrypoint 以
+  `--patch` 注入（文件头记录了 alpha.2 的机制变化与实测证据）。
+- `scripts/t/test-hmr-off.sh`：盯"保障"而非"实现文本"的门禁 —— 断言叠加层真的禁用了 `hmr`、
+  镜像真的携带它（COPY + CRLF 归一）、**每条** `dsh` 启动路径都注入了它，并**反向**断言不得再
+  退回已被 alpha.2 删除的 `patchReload` 机制。已用 3 个负向用例验证门禁确实会红
+  （撤掉一处注入 / 把 `disabled` 改成 `false` / 让 lifeboat 模板重新带上 `patchReload`）。
+
+### Changed
+- **`Dockerfile`：`ARG DSH_VERSION` 由 `0.1.6-alpha.1` 升到 `0.1.6-alpha.2`**；同步修正
+  文件头那张已过时的 dist-tag 对照表（实测 2026-09-18：`latest` 已从 `0.1.5-rc.1` 前进到
+  `0.1.5-rc.2`，`alpha` 指向 `0.1.6-alpha.2`）。
+- **`entrypoint.sh` 第 ⑤ 步**：不再改写/预置 `patchReload`（对 alpha.2 是死写入），只预置不带
+  该字段的 manifest，并把关闭 HMR 的动作移到启动参数；新增 `HMR_OFF_PATCH` 解析与兜底
+  （`hmr_off_args` 在各分支显式 `return 0` —— 命令替换的非零退出码在 `set -e` 下会直接终止
+  PID1）。`rescue-supervise.sh` 对 `HMR_OFF_PATCH` 做空值兜底，维持其"兼容 `set -u`"的自我声明。
+- `scripts/lifeboat.tmpl/package.json`：移除已失效的 `patchReload` 字段（救生舱同样走
+  `--patch` 关闭路径）。
+- **文档同步**（README 中英、docs 03/07 中英、compose 与 workflow 的示例 tag）：`patchReload`
+  加固说明改写为新机制并记录换代原因；dist-tag 表更新为实测值并加注"只是某一时刻的快照"；
+  README 的 DSH 版本徽章同步到 `0.1.6-alpha.2`。
+- `test-nonroot.sh`：删掉两条已失效的 `patchReload` 断言（它们正是"绿着但保护已蒸发"的来源），
+  改为断言 `HMR_OFF_PATCH` 在位，完整断言移交 `test-hmr-off.sh`。
+
 ## [v0.4.8-dsh-0.1.6-alpha.1] - 2026-09-17
 
 > 承接 v0.4.7 上线后暴露的**非 root 迁移遗留问题**：HOME 指向不可读的 `/root` 导致

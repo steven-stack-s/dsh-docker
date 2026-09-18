@@ -17,17 +17,19 @@ FROM node:24-slim
 # 构建时锁定的 dsh / pnpm 版本。用 build-arg 覆盖即可换版本：--build-arg DSH_VERSION=1.2.3
 #
 # 【为什么不用 latest】npm 的 dist-tag 是发布者手动指定的别名，**不会自动前进**。
-# 当前三个 tag 指向三个不同版本：
-#   latest -> 0.1.5-rc.1    （稳定推荐版，落后于 next）
+# 当前三个 tag 的实测指向（2026-09-18 核对 npm dist-tags）：
+#   latest -> 0.1.5-rc.2    （稳定推荐版，落后于 alpha）
 #   next   -> 0.1.5-rc.2    （更新的候选版）
-#   alpha  -> 0.1.6-alpha.1 （本镜像锁定的版本）
+#   alpha  -> 0.1.6-alpha.2 （本镜像锁定的版本）
+# 注：latest 曾长期停在 0.1.5-rc.1（rc.2 发布时只推进 next），现已跟上 rc.2；
+#     无论它指向谁，都**拿不到 0.1.6**（alpha 线只挂在 alpha tag 下）。
 # 用 latest 会带来两个真问题：
 #   1) 与 docker-compose.yml 的默认值不一致 —— 不传 DSH_VERSION 时，
 #      docker build 与 docker compose build 会产出不同 dsh 版本的镜像；
 #   2) 默认值随 npm 上的 tag 变动而静默漂移，同一份 Dockerfile 在不同时间构建出不同版本。
 # 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
 # 注意：alpha 版本必须写全版本号 —— latest/next 都拿不到它。
-ARG DSH_VERSION=0.1.6-alpha.1
+ARG DSH_VERSION=0.1.6-alpha.2
 ARG PNPM_VERSION=latest
 
 # 可选 apt 镜像源（国内构建加速）：传 --build-arg APT_MIRROR=mirrors.aliyun.com 启用；
@@ -114,11 +116,12 @@ EXPOSE 3080
 # 救援工具集（librescue + probe + 命令入口 + lifeboat 模板）
 # Docker 的 COPY <src> 为目录时只复制其【内容】到目标、不保留目录本身；故先 mkdir 目标目录、
 # 再以 <dir>/. 结尾复制，确保内容落在 /opt/dsh-rescue/lifeboat.tmpl/ 子目录（LIFEBOAT_TMPL 语义）。
-COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh scripts/rescue /opt/dsh-rescue/
+# hmr-off.yml 是 HMR 关闭用的 launcher 叠加层，由 entrypoint 以 --patch 注入（见该文件头注释）
+COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh scripts/rescue scripts/hmr-off.yml /opt/dsh-rescue/
 RUN mkdir -p /opt/dsh-rescue/lifeboat.tmpl
 COPY scripts/lifeboat.tmpl/. /opt/dsh-rescue/lifeboat.tmpl/
 ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
-RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/logtee.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
+RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/logtee.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/hmr-off.yml /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
     && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
     && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue
 

@@ -79,13 +79,19 @@ Since v0.4.6 the image runs as a **non-root** user and tightens capabilities + r
   `NPM_CONFIG_CACHE` defaults to `/opt/dsh/.npm-cache` (inside a writable volume, created and `chown`ed
   to the run user on first boot; usable by both root `docker exec npm` and the node user) so
   `npm install -g` upgrades and rescue cleaning still work.
-- **Web profile forced to `patchReload: startup`**: `web` is the only dsh profile that defaults to
-  `patchReload:"live"` (hot-reload of `cordis.patch.yml`). Its HMR relies on a native addon
-  (`node-addon-require-builtin`) that has no usable binding under a read-only root FS, so it throws
-  `--expose-internals is required` on startup and dsh crashes. The entrypoint rewrites the web profile
-  to `startup` on first boot (an official dsh value; config changes take effect on `docker restart`,
-  no live hot-reload, matching acp/headless/sdk defaults). If you truly need live hot-reload in
-  production, disable `read_only` instead.
+- **HMR disabled at launch** (via a `--patch` overlay): HMR relies on a native addon
+  (`node-addon-require-builtin`) that may have no usable binding under a read-only root FS; dsh then
+  throws `--expose-internals is required for HMR service` and crashes. Config changes inside the
+  container are also meant to take effect through `docker restart`. The entrypoint therefore injects
+  `--patch /opt/dsh-rescue/hmr-off.yml` (overlay: `scripts/hmr-off.yml`) into **every** launch
+  command, turning off the base bundle's `hmr` row.
+  **Mechanism changed 2026-09-18**: DSH 0.1.6-alpha.2 removed the profile manifest's `patchReload`
+  field (from then on it is **silently ignored**) and now enables HMR from the `hmr` row whenever a
+  launcher provides a profile context — so the earlier "rewrite `patchReload` to `startup` on first
+  boot" approach **no longer works** on alpha.2 (HMR would in fact stay on). Moving the switch to a
+  launch argument makes it independent of any version-specific manifest field, so in-container upgrades
+  or rollbacks of dsh cannot break it. If you truly need live hot-reload in production, disable
+  `read_only` and drop that overlay.
 - **NAS / kernel caveat**: `cap_drop:[ALL]` may affect in-volume permissions and hard links
   (rescue snapshot `hardlink` uses `cp -al`) on some NAS storage backends (NFS / certain storage pools).
   Verified in this repo's e2e sandbox; before deploying to a target platform, run

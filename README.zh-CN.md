@@ -5,7 +5,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8)](https://github.com/steven-stack-s/dsh-docker/releases)
 [![镜像构建](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml/badge.svg)](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml)
 [![GHCR 镜像](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.6--alpha.1-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.6--alpha.2-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
 [![MIT 许可证](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
 
 > 在**任意 Docker 环境**（Linux 服务器 / NAS / 云主机 / Docker Desktop）一键部署
@@ -111,15 +111,15 @@ docker compose up -d
 - **默认安全姿态**（v0.4.6 起）：容器以**非 root** 的 `node` 用户（uid 1000）运行（入口脚本首启 chown
   挂载卷后 `setpriv` 降权），并启用 `cap_drop:[ALL]`（保留 4 个最小能力）、根 FS 只读
   （`read_only` + `tmpfs /tmp`）、`no-new-privileges`。上层 web 进程/插件不再以 root 运行。
-  因 web profile 的 HMR 依赖的 native addon 在只读根 FS 下不可用，已将 `patchReload` 固化为
-  `startup`（改配置后 `docker restart` 生效，不实时热重载）。
+  因 web profile 的 HMR 依赖的 native addon 在只读根 FS 下不可用，入口脚本启动时以 `--patch`
+  叠加层关闭其 `hmr` 条目（改配置后 `docker restart` 生效，不实时热重载）。
   详见 [docs/zh-CN/07-环境变量速查.md](docs/zh-CN/07-环境变量速查.md) 的「安全加固」节。
 
 ---
 
 ## 🏷️ 版本
 
-发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh-<dsh版本>`（如 `v0.4.4-dsh-0.1.6-alpha.1`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
+发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh-<dsh版本>`（如 `v0.4.9-dsh-0.1.6-alpha.2`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
 
 ---
 

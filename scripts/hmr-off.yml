@@ -1,0 +1,32 @@
+# 关闭 profile 的配置热重载（HMR）—— read_only 生产加固用叠加层
+#
+# 【为什么需要它】DSH 0.1.6-alpha.2 改写了 HMR 的实现与开关方式：
+#   - 实现：@deepseek-ai/cordis-plugin-hmr（外部插件）→ @deepseek-ai/dsh-hmr（新包）
+#   - 开关：profile manifest 的 `patchReload` 字段 → base 组合包里 `hmr` 条目的
+#     `disabled: !!js "!ctx.get('profileContext')"`
+#   后者意味着「**只要由启动器拉起（web / headless / sdk / acp 全部算）就默认启用**」，
+#   而旧版是硬编码 `disabled: true`（模块热重载 opt-in）。实测：alpha.2 新建的 web profile
+#   manifest **已不再写入 `patchReload`**，且 dsh-app-boot 源码里该字段的引用被完全删除。
+#   因此 entrypoint 早先「sed 把 `patchReload: "live"` 改写成 `"startup"`」的关闭手段在
+#   alpha.2 下**已失效**（字段被静默忽略：实测存量 manifest 带该字段仍能启动，但那只是没报错，
+#   并不代表 HMR 被关掉了）。
+#
+# 【为什么容器里必须关掉它】本镜像默认 read_only 根 FS（compose `read_only: true`），
+#   而 HMR 服务启动时需要 `ctx.loader.internal`；该值由 profile 插件解析（原生绑定
+#   node-addon-require-builtin / node-addon-native-custom-loader）装上的 hook 提供。
+#   绑定不可用时 dsh-hmr 直接抛：
+#     Error: --expose-internals is required for HMR service
+#   使 dsh 启动即崩，且 rescue 难以自愈。关闭 HMR 后配置改动在 `docker restart` 后生效，
+#   与 acp / headless / sdk 组合包的默认行为一致。
+#
+# 【如何生效】entrypoint 在启动命令上注入 `--patch <本文件>`（launcher 的叠加层，
+#   应用在 profile 层**之后**，优先级够高，实测可把 `disabled` 覆盖为 true）。
+#   该做法**不触碰**用户的 profile manifest 与 cordis.patch.yml。
+#   实测兼容性：`--patch` 在 0.1.5-rc.2 / 0.1.6-alpha.1 / 0.1.6-alpha.2 上均存在，
+#   故容器内升级或回退 dsh 版本时本条都不会失效。
+#
+# 注：对不含 `hmr` 条目的 profile（如 sdk-minimal，不加载 dsh-base）应用本叠加层只会打印
+#   一行 "patch: entry \"hmr\" not found" 警告，退出码仍为 0；entrypoint 已按 profile 名
+#   限定只对 web / lifeboat 注入，避免无谓噪音。
+- id: hmr
+  disabled: true
