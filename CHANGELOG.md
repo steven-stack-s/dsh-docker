@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [v0.4.10-dsh-0.1.6-alpha.2] - 2026-09-18
+
 ### Added
 - **镜像升级时按版本自动同步 dsh 本体**（`entrypoint` 步骤 ① 重写）。此前只在 `command -v dsh`
   失败时才复制 seed，于是**升级镜像并不会更新** `/opt/dsh` 卷里的 dsh —— 实测：换用更新 seed 的
