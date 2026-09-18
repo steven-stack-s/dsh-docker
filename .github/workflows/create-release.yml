@@ -77,7 +77,12 @@ jobs:
             # 每个 tag 的成败都要单独判定并计入 fail —— 旧实现只判断 create/edit 的"有没有执行"，
             # 不看退出码，于是单个 release 创建失败会被完全吞掉，工作流照样绿灯（v0.4.3 就是这么丢的）。
             if gh release view "$t" >/dev/null 2>&1; then
-              if gh release edit "$t" --title "$t" --notes-file /tmp/notes.md; then
+              # --draft=false：把 draft Release 一并发布出去。
+              # 场景：tag 被删除后重新推送时，GitHub 会把原 Release 转为 **draft**，
+              # 而 gh release edit 默认【不改变 draft 状态】—— 于是这里"更新成功"、workflow 绿灯，
+              # 但用户在 Releases 页面永远看不到它（匿名 /releases/tags/<tag> 返回 404）。
+              # v0.4.9 实测踩到：删 tag 重推后 Release 卡在 draft，绿灯却不可见。
+              if gh release edit "$t" --title "$t" --notes-file /tmp/notes.md --draft=false; then
                 echo "updated: $t"; updated=$((updated + 1))
               else
                 echo "::error::更新 release 失败: $t"; fail=1

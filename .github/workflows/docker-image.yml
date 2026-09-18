@@ -134,9 +134,12 @@ jobs:
           if [ ! -s /tmp/notes.md ]; then
             printf 'See CHANGELOG.md for details.\n' > /tmp/notes.md
           fi
-          # 幂等：已存在则更新，不存在则创建（手动重跑 workflow 也不会报错）
+          # 幂等：已存在则更新，不存在则创建（手动重跑 workflow 也不会报错）。
+          # --draft=false 是必需的：tag 删除后重推会让 GitHub 把原 Release 转为 **draft**，
+          # 而 gh release edit 默认不改 draft 状态 —— 那样 job 绿灯、用户却在 Releases
+          # 页面看不到（匿名 /releases/tags/<tag> 返回 404）。见 create-release.yml 同处注释。
           gh release view "$TAG" >/dev/null 2>&1 \
-            && gh release edit "$TAG" --title "$TAG" --notes-file /tmp/notes.md \
+            && gh release edit "$TAG" --title "$TAG" --notes-file /tmp/notes.md --draft=false \
             || gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
 
       # ---- 门禁 3：镜像自证（防"标着锁版、实为 latest"）----
