@@ -25,6 +25,13 @@ on:
     paths:
       - '.github/workflows/create-release.yml'
 
+# 防重入：补建/更新 Release 的脚本是状态一致的 —— 两个并发 run 会对同一批 tag 做 create/edit，
+# 谁会先写、谁覆盖谁无法确定。串行化（排队而非取消）保证一次只处理一批，避免互相踩踏。
+# cancel-in-progress: false = 排队而非取消，避免中途打断正在写的 Release。
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest

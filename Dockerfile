@@ -10,27 +10,20 @@
 #
 # 【Node 版本要求】DSH 需要 Node >= 22.18（zstd / Promise.withResolvers /
 #   stripTypeScriptTypes 等新 API），故用当前 LTS 的 node:24-slim。
+#
+# 【多 target 结构】拆成 base / runtime 两段：
+#   - base：node:24-slim + apt 系统依赖 + 运行期 ENV + 救援工具 + entrypoint ——
+#     全部与 DSH_VERSION【无关】，被 buildkit 缓存；配合 CI 的 gha scope=base 缓存，
+#     跨 tag 不再重跑这些层。`docker build` 默认出的仍是含 dsh 的完整镜像，行为不变。
+#   - runtime：仅追加 npm/pre:pnpm install @deepseek-ai/dsh@${DSH_VERSION} 这一层。
+#     若需显式只构建 base：`docker build --target base ...`。
 # ============================================================================
 
-FROM node:24-slim
+# syntax 声明让 BuildKit 支持 cache mount（#5 npm 下载缓存）。buildx 自带较新 buildkit，
+# 但显式声明可让老 buildkit 也正确解析。
+# syntax=docker/dockerfile:1.7
 
-# 构建时锁定的 dsh / pnpm 版本。用 build-arg 覆盖即可换版本：--build-arg DSH_VERSION=1.2.3
-#
-# 【为什么不用 latest】npm 的 dist-tag 是发布者手动指定的别名，**不会自动前进**。
-# 当前三个 tag 的实测指向（2026-09-18 核对 npm dist-tags）：
-#   latest -> 0.1.5-rc.2    （稳定推荐版，落后于 alpha）
-#   next   -> 0.1.5-rc.2    （更新的候选版）
-#   alpha  -> 0.1.6-alpha.2 （本镜像锁定的版本）
-# 注：latest 曾长期停在 0.1.5-rc.1（rc.2 发布时只推进 next），现已跟上 rc.2；
-#     无论它指向谁，都**拿不到 0.1.6**（alpha 线只挂在 alpha tag 下）。
-# 用 latest 会带来两个真问题：
-#   1) 与 docker-compose.yml 的默认值不一致 —— 不传 DSH_VERSION 时，
-#      docker build 与 docker compose build 会产出不同 dsh 版本的镜像；
-#   2) 默认值随 npm 上的 tag 变动而静默漂移，同一份 Dockerfile 在不同时间构建出不同版本。
-# 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
-# 注意：alpha 版本必须写全版本号 —— latest/next 都拿不到它。
-ARG DSH_VERSION=0.1.6-alpha.2
-ARG PNPM_VERSION=latest
+FROM node:24-slim AS base
 
 # 可选 apt 镜像源（国内构建加速）：传 --build-arg APT_MIRROR=mirrors.aliyun.com 启用；
 # 默认空即用 debian 官方源。对 Debian 12 (bookworm) 的 sources.list 类型自动适配。
@@ -59,14 +52,6 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 # 避免挂载 /usr/local 遮蔽镜像内的 node/npm 命令
 ENV NPM_CONFIG_PREFIX=/opt/dsh
 ENV PATH=/opt/dsh/bin:$PATH
-
-# 预装 dsh + pnpm 到 /opt/dsh-seed（非挂载路径，运行时不被卷遮蔽）。
-# entrypoint 在挂载卷 /opt/dsh 为空时，把 seed 整体复制过去 → 首次启动即就绪、离线可用、版本固定。
-# 升级仍走 docker exec npm install -g @deepseek-ai/dsh@<新版本> 覆盖到 /opt/dsh。
-# 用临时 NPM_CONFIG_PREFIX 覆盖上面的 ENV，让安装落进 seed 而非 /opt/dsh（/opt/dsh 留给运行时挂载）。
-RUN NPM_CONFIG_PREFIX=/opt/dsh-seed \
-    npm install -g @deepseek-ai/dsh@${DSH_VERSION} pnpm@${PNPM_VERSION} \
-    && rm -rf /root/.npm
 
 # 数据根目录：DSH 所有用户数据（会话/配置/插件/记忆库）
 ENV DSH_HOME=/data/dsh
@@ -146,3 +131,46 @@ ENTRYPOINT ["dsh-entrypoint"]
 # 否则 rescue 会先于 docker 放弃而误回滚一个仍在正常冷启动的 dsh。构建时已预装 dsh，复制 seed 秒级。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
   CMD node -e "require('net').connect(3081,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+
+# ============================================================================
+# runtime stage —— 唯一的"版本相关"层：预装 dsh + pnpm 到 /opt/dsh-seed
+#
+# base 里 apt/ENV/scripts/entrypoint 全部与 DSH_VERSION 无关，被 buildkit 缓存；
+# runtime 仅追加这一层。换 DSH_VERSION 时只有本层重做（配合 CI 的 gha scope=base
+# 缓存，base 层跨 tag 命中，不发版期间不重跑 apt ~31s）。
+#
+# `docker build`（无 --target）默认出 runtime = 完整含 dsh 镜像，行为与拆分前一致。
+# ============================================================================
+
+FROM base AS runtime
+
+# 构建时锁定的 dsh / pnpm 版本。用 build-arg 覆盖即可换版本：--build-arg DSH_VERSION=1.2.3
+#
+# 【为什么不用 latest】npm 的 dist-tag 是发布者手动指定的别名，**不会自动前进**。
+# 当前三个 tag 的实测指向（2026-09-18 核对 npm dist-tags）：
+#   latest -> 0.1.5-rc.2    （稳定推荐版，落后于 alpha）
+#   next   -> 0.1.5-rc.2    （更新的候选版）
+#   alpha  -> 0.1.6-alpha.2 （本镜像锁定的版本）
+# 注：latest 曾长期停在 0.1.5-rc.1（rc.2 发布时只推进 next），现已跟上 rc.2；
+#     无论它指向谁，都**拿不到 0.1.6**（alpha 线只挂在 alpha tag 下）。
+# 用 latest 会带来两个真问题：
+#   1) 与 docker-compose.yml 的默认值不一致 —— 不传 DSH_VERSION 时，
+#      docker build 与 docker compose build 会产出不同 dsh 版本的镜像；
+#   2) 默认值随 npm 上的 tag 变动而静默漂移，同一份 Dockerfile 在不同时间构建出不同版本。
+# 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
+# 注意：alpha 版本必须写全版本号 —— latest/next 都拿不到它。
+ARG DSH_VERSION=0.1.6-alpha.2
+ARG PNPM_VERSION=latest
+
+# 预装 dsh + pnpm 到 /opt/dsh-seed（非挂载路径，运行时不被卷遮蔽）。
+# entrypoint 在挂载卷 /opt/dsh 为空时，把 seed 整体复制过去 → 首次启动即就绪、离线可用、版本固定。
+# 升级仍走 docker exec npm install -g @deepseek-ai/dsh@<新版本> 覆盖到 /opt/dsh。
+# 用临时 NPM_CONFIG_PREFIX 覆盖上面的 ENV，让安装落进 seed 而非 /opt/dsh（/opt/dsh 留给运行时挂载）。
+# --mount=type=cache,target=/root/.npm：把 npm 缓存挂到 /root/.npm（构建期 cache mount）。
+#   ① 同一/相近 DSH_VERSION 重复构建时已下载的 tarball 命中缓存，缩短网络等待（基线实测 npm 层 ~106s，
+#      下载占大头）；配合 CI 的 gha scope=base 缓存，跨发版也能复用其内容。
+#   ② /root/.npm 被 cache mount 挂载覆盖，**其内容不写入镜像层**——所以这里【不做】 rm -rf /root/.npm：
+#      镜像已天然不含 npm 缓存（原修剪目的由 cache mount 实现），在 RUN 里删反而因挂载忙报错。
+RUN --mount=type=cache,target=/root/.npm \
+    NPM_CONFIG_PREFIX=/opt/dsh-seed \
+    npm install -g @deepseek-ai/dsh@${DSH_VERSION} pnpm@${PNPM_VERSION}
