@@ -4,60 +4,63 @@
 
 ## 1. Upgrade
 
-An upgrade involves **two independent layers** that do **not** carry each other along — this is the
-single most common source of confusion:
+An upgrade involves **two layers**, but normally **one step is enough** — because an image upgrade
+syncs dsh itself automatically:
 
 | Layer | Contents | How to update |
 |---|---|---|
 | **Image layer** | `entrypoint`, rescue scripts, `/opt/dsh-seed` (the dsh pinned at build time) | `docker compose pull && docker compose up -d` |
-| **dsh itself** | the dsh actually running from the mounted volume `/opt/dsh` | `npm install -g` inside the container |
+| **dsh itself** | the dsh actually running from the mounted volume `/opt/dsh` | the step above **does it for you** (see below); or `npm install -g` on its own |
 
-### ⚠️ Recreating the container does not update dsh itself
+### The image upgrade syncs dsh itself by version
 
-On first boot the image copies its seed into `/opt/dsh`, but **only when `command -v dsh` fails**
-(`scripts/entrypoint.sh`, step ①). So once the `/opt/dsh` volume already holds a dsh (**any** version),
-recreating the container will **not** overwrite it.
+On startup the entrypoint (`scripts/entrypoint.sh`, step ①) compares the **image seed's version** with
+the **version of the dsh in the volume**:
 
-**Measured**: take a volume produced by an older image (`0.1.6-alpha.1`) and recreate the container with
-a newer image pinning `0.1.6-alpha.2` — `dsh --version` **still reports `0.1.6-alpha.1`**. The image layer
-really is the new one (entrypoint and friends updated), but the dsh in the volume was left untouched.
-**"I upgraded but the version did not change" is almost always this.**
+| Situation | Action |
+|---|---|
+| No dsh in the volume | Copy the seed (first boot) |
+| **Seed version > volume version** | **Copy the seed** — dsh follows the image upgrade automatically |
+| Versions equal | Do nothing (no redundant copy) |
+| Volume version is newer (you installed a higher one in-container) | **Do nothing** — your choice is respected |
 
-### Recommended order: image first, then dsh
+The startup log prints all three versions, so one line answers "did it actually upgrade?":
 
-```bash
-# Step 1: update the image layer (entrypoint / rescue scripts / seed)
-docker compose pull && docker compose up -d
-
-# Step 2: update dsh itself (~90s measured, 245 dependency packages)
-docker exec dsh npm install -g @deepseek-ai/dsh@<version>
-docker restart dsh
+```
+[entrypoint] dsh version: seed=0.1.6-alpha.2 volume(before)=0.1.6-alpha.1 effective=0.1.6-alpha.2
 ```
 
-> ⚠️ **Do not reverse the order.** Upgrading dsh first leaves the intermediate state "new dsh + old
-> entrypoint" — and the entrypoint is what carries the read-only hardening (disabling the profile's HMR;
-> see the hardening section of [07 · Environment variables](07-environment-variables.md)). The
-> recommended order keeps every intermediate state safe: the `--patch` injected by the new entrypoint is
-> equally valid on older dsh versions (`--patch` exists in `0.1.5-rc.2` / `0.1.6-alpha.1` /
-> `0.1.6-alpha.2`, verified one by one).
-
-Verify after upgrading:
+So an upgrade normally needs only:
 
 ```bash
-docker exec dsh dsh --version                       # expect: the target version
+docker compose pull && docker compose up -d
+docker exec dsh dsh --version                       # expect: the image seed's version
 docker inspect -f '{{.State.Health.Status}}' dsh    # expect: healthy
+docker logs dsh 2>&1 | grep 'dsh version'           # all three versions at a glance
 docker logs dsh 2>&1 | grep -i 'expose-internals'   # expect: no output
 ```
 
-### Upgrading dsh alone (image layer unchanged)
+### Upgrading / downgrading dsh alone
 
-When the image layer has not changed (e.g. it is already current and you only want a dsh patch
-release), do step 2 only:
+When the image seed has not changed, or you want a version **different from the image**, use npm inside
+the container:
 
 ```bash
 docker exec dsh npm install -g @deepseek-ai/dsh@<version>
 docker restart dsh
 ```
+
+> ⚠️ **Upgrades stick, downgrades get reverted**: install a version **higher** than the seed and the next
+> startup sees `seed < volume` → it does nothing, so your version stays; install one **lower** than the
+> seed and the next startup overwrites it with the seed. That is deliberate — the image's pinned version
+> wins. To stay on a lower version, point `DSH_IMAGE` at an image tag that pins it.
+>
+> 💡 By the same rule, `docker exec dsh rescue dsh-upgrade <version>` gets overwritten on the next startup
+> if the version it installs is lower than the image seed. For a lasting pin, always go through the image tag.
+>
+> ⚠️ If you do change dsh by hand, **upgrade the image first, then dsh**: the reverse order leaves the
+> intermediate state "new dsh + old entrypoint", and the entrypoint carries the read-only hardening
+> (disabling the profile's HMR; see the hardening section of [07 · Environment variables](07-environment-variables.md)).
 
 ### Always spell out the full version (do not use `latest` / `next`)
 
@@ -99,17 +102,19 @@ docker exec dsh dsh --version
 > when the volume holds no dsh at all — see the top of this chapter), so after rebuilding the image you
 > still need step 2 of the two-step upgrade.
 
-### Rolling back (also two layers)
+### Rolling back (driven by the image tag)
+
+Because startup syncs dsh to the image seed by version, **rollbacks must go through the image tag too**:
 
 | What to roll back | How |
 |---|---|
-| **dsh itself** only | `docker exec dsh npm install -g @deepseek-ai/dsh@<old-version> && docker restart dsh` |
-| **Image layer** | point `DSH_IMAGE` in `.env` back at the old tag → `docker compose pull && docker compose up -d` |
+| Back to the old dsh version | point `DSH_IMAGE` in `.env` back at the old tag → `docker compose pull && docker compose up -d` (dsh follows that image's seed automatically — no manual npm) |
+| Temporarily change dsh (no image swap) | `docker exec dsh npm install -g @deepseek-ai/dsh@<version> && docker restart dsh` — ⚠️ it only survives if that version is **≥ the image seed**; otherwise the next startup overwrites it |
 | **Everything** | unpack the pre-upgrade backup, including the `dsh/` data directory (see the data-format warning above) |
 
-> 💡 "Old dsh + new image" is a **safe combination**: the `--patch` injected by the new entrypoint works
-> just as well on older dsh versions. What you want to avoid is the reverse (new dsh + old entrypoint);
-> see the ordering note at the top of this chapter.
+> ⚠️ "Old dsh + new image" is **no longer a viable combination**: the new image's seed displaces the old
+> dsh on the next startup. To stay on an older version you must roll the **image tag** back as well — an
+> unavoidable consequence of the image's pinned version winning.
 
 ### Cleaning up after upgrades
 
@@ -200,8 +205,8 @@ docker compose up -d       # rebuild the container
 | Operation | Command |
 |---|---|
 | Check version | `docker exec dsh dsh --version` |
-| Upgrade the image layer | `docker compose pull && docker compose up -d` (does **not** change the dsh in the volume) |
-| Upgrade dsh itself | `docker exec dsh npm install -g @deepseek-ai/dsh@<version> && docker restart dsh` |
+| Upgrade (image + dsh follows) | `docker compose pull && docker compose up -d` |
+| Change dsh alone | `docker exec dsh npm install -g @deepseek-ai/dsh@<version> && docker restart dsh` (survives only if ≥ image seed) |
 | Install a plugin | `docker exec dsh dsh plugin --profile web add <package> && docker restart dsh` |
 | Change API key | Edit .env → `docker compose up -d` |
 | Restart | `docker restart dsh` |

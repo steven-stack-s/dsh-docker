@@ -17,6 +17,14 @@ elog() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 # 显式赋值是为了不再依赖"librescue 恰好也设置了它"这种隐式耦合。
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
+# 版本比较（ver_gt）—— 步骤 ① 用它决定镜像 seed 是否覆盖 /opt/dsh 卷里的 dsh。
+# 必须在这里 source：步骤 ① 在 root 首启块内，早于 librescue.sh 被 source 的位置。
+# 找不到时降级为「不做版本比较」（行为退回「仅首启复制」），绝不因此中断启动。
+for _vc in /opt/dsh-rescue/vercmp.sh "$HERE/scripts/vercmp.sh" "$HERE/vercmp.sh"; do
+  if [ -f "$_vc" ]; then . "$_vc"; break; fi
+done
+command -v ver_gt >/dev/null 2>&1 || elog '[entrypoint] WARN vercmp.sh missing; seed version comparison disabled'
+
 # ----------------------------------------------------------------------------
 # 首启 root 初始化 + 非 root 降权（容器安全加固第 2 步）
 #
@@ -60,11 +68,32 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
     elog "[entrypoint]   run-user HOME $_home_before is not usable by uid $RUN_USER_ID -> $HOME"
   fi
 
-  # ① 首启：把镜像内 /opt/dsh-seed 复制到挂载卷 /opt/dsh
+  # ① 保证 /opt/dsh 卷里的 dsh **不低于**镜像 seed（只升不降）。触发条件（任一）：
+  #      a) 卷里没有 dsh               —— 首启
+  #      b) 镜像 seed 版本 > 卷内版本  —— 升级镜像后自动跟进，不必再手动 npm install
+  #    相等、或卷里反而更新（用户在容器内手动装过更高版本）时**不动**，尊重用户的选择。
+  #    版本取自各自安装目录里的 package.json：比跑 `dsh --version` 更快、无副作用，
+  #    也不会因 profile / 权限问题失败。ver_gt 由 scripts/vercmp.sh 提供（与徽章脚本共用一份）。
+  _dsh_rel=lib/node_modules/@deepseek-ai/dsh/package.json
+  _seed_ver=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "/opt/dsh-seed/$_dsh_rel" 2>/dev/null | head -n1)
+  _vol_ver=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "/opt/dsh/$_dsh_rel" 2>/dev/null | head -n1)
+
+  _reseed=''
   if ! command -v dsh >/dev/null 2>&1; then
-    elog "[entrypoint]   seeding @deepseek-ai/dsh into mounted volume /opt/dsh ..."
+    _reseed='no dsh in volume'
+  elif [ -n "$_seed_ver" ] && [ -n "$_vol_ver" ] && command -v ver_gt >/dev/null 2>&1; then
+    if ver_gt "$_seed_ver" "$_vol_ver"; then
+      _reseed="image seed $_seed_ver > volume $_vol_ver"
+    fi
+  fi
+
+  if [ -n "$_reseed" ]; then
+    elog "[entrypoint]   seeding dsh into /opt/dsh ($_reseed)"
     if [ -x /opt/dsh-seed/bin/dsh ]; then
-      # 从镜像内 seed 复制：离线、版本固定、秒级完成
+      # 从镜像内 seed 复制：离线、版本固定、秒级完成。
+      # 用 cp -a 覆盖（与 rescue dsh-reinstall 的离线兜底同一手法）：它不删除目标里多出的旧
+      # 文件，旧版独有的包目录会残留；但 dsh 按自己的 package.json 解析依赖，残留目录不会被
+      # 加载，故不做 rm —— 保留「复制失败时卷里仍有可用 dsh」的余地。
       elog "[entrypoint]   copying in-image seed (/opt/dsh-seed) to /opt/dsh"
       mkdir -p /opt/dsh
       cp -a /opt/dsh-seed/. /opt/dsh/
@@ -79,8 +108,11 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
         npm install -g @deepseek-ai/dsh
       fi
     fi
-    elog "[entrypoint] dsh ready: $(command -v dsh)"
   fi
+
+  # 无论本轮是否复制，都报出**最终实际生效**的版本 —— 判断「升没升上去」就看这一行。
+  _eff_ver=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "/opt/dsh/$_dsh_rel" 2>/dev/null | head -n1)
+  elog "[entrypoint] dsh version: seed=${_seed_ver:-unknown} volume(before)=${_vol_ver:-none} effective=${_eff_ver:-unknown}"
 
   # ② pnpm：dsh plugin 命令（插件管理）转发到 pnpm 执行，必须可用
   if ! command -v pnpm >/dev/null 2>&1; then

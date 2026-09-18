@@ -6,6 +6,36 @@
 
 ## [Unreleased]
 
+### Added
+- **镜像升级时按版本自动同步 dsh 本体**（`entrypoint` 步骤 ① 重写）。此前只在 `command -v dsh`
+  失败时才复制 seed，于是**升级镜像并不会更新** `/opt/dsh` 卷里的 dsh —— 实测：换用更新 seed 的
+  镜像重建后，`dsh --version` 依旧是旧版本。现在改为版本比较驱动：
+  卷里没有 dsh → 复制；**seed 版本 > 卷内版本 → 复制**；相等、或卷内版本更新 → **不动**
+  （尊重用户在容器内装的更高版本）。启动日志直接给出三个版本：
+  `[entrypoint] dsh version: seed=0.1.6-alpha.2 volume(before)=0.1.6-alpha.1 effective=0.1.6-alpha.2`。
+  版本取自各自安装目录的 `package.json`：比跑 `dsh --version` 更快、无副作用，也不会因 profile
+  或权限问题失败。缺失比较库时降级为原行为（仅首启复制），绝不因此中断启动。
+
+- `scripts/vercmp.sh`：把 `ver_gt`（semver 比较，按 §11 正确处理预发布）从 `update-dsh-badge.sh`
+  抽成共享库 —— entrypoint 与徽章脚本共用**同一份**实现，杜绝「徽章那边算升级、seed 这边算降级」
+  这类极难察觉的语义分叉。
+
+### Changed
+- **容器内降级 dsh 会被启动逻辑撤销**：这是上一条的必然结果（镜像锁版本优先）。要停在更低版本，
+  须把 `DSH_IMAGE` 指向锁定该版本的镜像 tag。`docs/03`（中英）的升级与回滚章节已按新行为重写：
+  升级通常**一步即可**（`docker compose pull && docker compose up -d`），回滚同样以镜像 tag 为准；
+  README（中英）与速查表同步。
+
+### Tests
+- `scripts/t/test-vercmp.sh`：`ver_gt` 语义单测，覆盖 rc 转正、`alpha.10 > alpha.9` 等边界。
+- `scripts/t/test-seed-upgrade.sh`：门禁「比较逻辑在位 / 日志含最终生效版本 / **source 顺序早于首次
+  使用**（先用后 source 会让 ver_gt 根本不存在 —— 本项目 test-entrypoint-order.sh 就是为同类事故
+  而立的）」，并断言镜像携带 vercmp.sh；3 个负向用例已验证会红。
+
+### Verified
+- 真机（192.168.1.88，真 Docker）三向对照：alpha.1 卷 + alpha.2 seed → 自动升到 alpha.2；
+  版本相等 → 不复制（seeding 日志 0 条）；卷内 mock 成 9.9.9（更高）→ 不降级、保持 9.9.9。
+
 ## [v0.4.9-dsh-0.1.6-alpha.2] - 2026-09-18
 
 > 镜像 seed 锁定的 DSH 版本由 `0.1.6-alpha.1` 升到 `0.1.6-alpha.2`。这**不是**一次

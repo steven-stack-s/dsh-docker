@@ -117,7 +117,7 @@ EXPOSE 3080
 # Docker 的 COPY <src> 为目录时只复制其【内容】到目标、不保留目录本身；故先 mkdir 目标目录、
 # 再以 <dir>/. 结尾复制，确保内容落在 /opt/dsh-rescue/lifeboat.tmpl/ 子目录（LIFEBOAT_TMPL 语义）。
 # hmr-off.yml 是 HMR 关闭用的 launcher 叠加层，由 entrypoint 以 --patch 注入（见该文件头注释）
-COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh scripts/rescue scripts/hmr-off.yml /opt/dsh-rescue/
+COPY scripts/librescue.sh scripts/probe-ready.js scripts/diagnose.js scripts/report.js scripts/logtag.js scripts/logtee.js scripts/rescue-supervise.sh scripts/rescue scripts/hmr-off.yml scripts/vercmp.sh /opt/dsh-rescue/
 RUN mkdir -p /opt/dsh-rescue/lifeboat.tmpl
 COPY scripts/lifeboat.tmpl/. /opt/dsh-rescue/lifeboat.tmpl/
 ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
@@ -128,7 +128,7 @@ ENV LIFEBOAT_TMPL=/opt/dsh-rescue/lifeboat.tmpl
 #   问题只在 umask 收紧的构建机上出现。）
 # 故统一放开读权限：+x 只给需要执行的那三个，其余（含今后新增的资产）一律 a+r。
 # 注意：这些说明必须写在 RUN 之前 —— RUN 的续行里出现 # 会被 shell 当注释，吞掉其后的命令。
-RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/logtee.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/hmr-off.yml /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
+RUN sed -i 's/\r$//' /opt/dsh-rescue/librescue.sh /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/diagnose.js /opt/dsh-rescue/report.js /opt/dsh-rescue/logtag.js /opt/dsh-rescue/logtee.js /opt/dsh-rescue/rescue-supervise.sh /opt/dsh-rescue/rescue /opt/dsh-rescue/hmr-off.yml /opt/dsh-rescue/vercmp.sh /opt/dsh-rescue/lifeboat.tmpl/package.json /opt/dsh-rescue/lifeboat.tmpl/cordis.patch.yml \
     && chmod +x /opt/dsh-rescue/rescue /opt/dsh-rescue/probe-ready.js /opt/dsh-rescue/librescue.sh \
     && chmod a+r /opt/dsh-rescue/* /opt/dsh-rescue/lifeboat.tmpl/* \
     && ln -sf /opt/dsh-rescue/rescue /usr/local/bin/rescue

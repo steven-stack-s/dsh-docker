@@ -18,7 +18,7 @@
 **🧱 架构 —— 三层分离，秒级就绪，升级不重建镜像**
 
 - **构建时锁版本 + 镜像内 seed**：构建时预装 dsh+pnpm 到 seed（`/opt/dsh-seed`），首次启动离线复制到 `/opt/dsh`（版本固定、秒级就绪）；seed 保留在镜像层，主程序损坏可离线恢复
-- **程序与镜像分离，容器内升级**：DSH 程序本体装在挂载卷，日常升级 = `docker exec dsh npm install -g @deepseek-ai/dsh@<版本> && docker restart dsh`，无需重建镜像。注意**镜像层与 dsh 本体是两个层面**：`docker compose pull && up -d` 只更新镜像（entrypoint / 救援脚本），**不会**改卷里的 dsh（[详见 docs 03](docs/zh-CN/03-升级与维护.md)）
+- **程序与镜像分离，容器内升级**：DSH 程序本体装在挂载卷，日常升级 = `docker exec dsh npm install -g @deepseek-ai/dsh@<版本> && docker restart dsh`，无需重建镜像。**升级镜像时 dsh 会自动跟进**：容器启动会比较镜像 seed 与卷内 dsh 的版本，seed 更新即同步（[详见 docs 03](docs/zh-CN/03-升级与维护.md)）
 - **数据全持久化**：程序 / 用户数据（会话、配置、插件、记忆库）/ 工作区三卷分离，备份 = 复制目录
 - **安全默认**：`dsh web` 刻意只监听 `127.0.0.1:3081`（官方安全设计），`socat` 把外部 `3080` 转发进去；默认内网直连，远程访问可加装账号密码 + MFA 认证
 - **多架构**：GitHub Actions 自动构建 `linux/amd64` + `linux/arm64`，发布到 `ghcr.io`

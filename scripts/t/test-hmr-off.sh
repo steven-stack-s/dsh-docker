@@ -36,7 +36,9 @@ awk '/^-[[:space:]]+id:[[:space:]]*hmr[[:space:]]*$/{f=1;next} f&&/^-[[:space:]]
   || fail hmr-off-does-not-disable
 
 # ---- 2) 镜像必须携带 hmr-off.yml（COPY 进 /opt/dsh-rescue，并做 CRLF 归一）----
-grep -q 'scripts/hmr-off.yml[[:space:]]*/opt/dsh-rescue/' "$DFILE" || fail dockerfile-missing-hmr-off-copy
+# 用 .* 允许同一 COPY 行里还有别的文件：不要假设某个文件是行尾（本次在 hmr-off.yml 后面
+# 追加 vercmp.sh 时，旧断言就是这么误报的）。
+grep -qE '^COPY .*scripts/hmr-off\.yml .*/opt/dsh-rescue/' "$DFILE" || fail dockerfile-missing-hmr-off-copy
 grep -q '/opt/dsh-rescue/hmr-off.yml' "$DFILE" || fail dockerfile-missing-hmr-off-crlf-fix
 
 # ---- 2b) 救援资产必须对非属主可读（否则 uid 1000 的 dsh/rescue 读不到）----

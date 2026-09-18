@@ -67,38 +67,11 @@ fi
 escape_shields()   { printf '%s' "$1" | sed 's/-/--/g'; }
 unescape_shields() { printf '%s' "$1" | sed 's/--/-/g'; }
 
-# ver_gt A B —— A 严格大于 B 时返回 0。按 semver §11 正确处理预发布：
-# 主版本相同且一方无预发布时，无预发布者更大（0.1.5 > 0.1.5-rc.1）。
-# 不能用 sort -V 代替：它把 "0.1.5" 排在 "0.1.5-rc.1" 之前，会把 rc 转正误判成降级。
-ver_gt() {
-  _a=$1; _b=$2
-  _am=${_a%%-*}; _ap=''
-  case "$_a" in *-*) _ap=${_a#*-} ;; esac
-  _bm=${_b%%-*}; _bp=''
-  case "$_b" in *-*) _bp=${_b#*-} ;; esac
-
-  _saved_ifs=$IFS
-  IFS=.
-  set -- $_am; _a1=${1:-0}; _a2=${2:-0}; _a3=${3:-0}
-  set -- $_bm; _b1=${1:-0}; _b2=${2:-0}; _b3=${3:-0}
-  IFS=$_saved_ifs
-
-  if [ "$_a1" -gt "$_b1" ]; then return 0; fi
-  if [ "$_a1" -lt "$_b1" ]; then return 1; fi
-  if [ "$_a2" -gt "$_b2" ]; then return 0; fi
-  if [ "$_a2" -lt "$_b2" ]; then return 1; fi
-  if [ "$_a3" -gt "$_b3" ]; then return 0; fi
-  if [ "$_a3" -lt "$_b3" ]; then return 1; fi
-
-  if [ -z "$_ap" ] && [ -n "$_bp" ]; then return 0; fi
-  if [ -n "$_ap" ] && [ -z "$_bp" ]; then return 1; fi
-  if [ -z "$_ap" ]; then return 1; fi
-
-  # 双方都有预发布：逐段近似比较即可（rc.2 > rc.1）
-  _top=$(printf '%s\n%s\n' "$_bp" "$_ap" | LC_ALL=C sort -V | tail -n 1)
-  if [ "$_top" = "$_ap" ] && [ "$_ap" != "$_bp" ]; then return 0; fi
-  return 1
-}
+# 版本比较由 scripts/vercmp.sh 提供 —— entrypoint 也用**同一份**实现（它决定镜像 seed 是否
+# 覆盖 /opt/dsh 卷里的 dsh）。两处语义一旦分叉，就会出现「徽章算升级、seed 算降级」这种
+# 很难查的不一致，故本文件不再保留副本。
+. "$(dirname -- "$0")/vercmp.sh"
+command -v ver_gt >/dev/null 2>&1 || { echo 'update-dsh-badge: vercmp.sh missing (should sit next to this script)'; exit 2; }
 
 changed=0
 unchanged=0
