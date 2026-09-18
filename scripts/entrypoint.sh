@@ -25,6 +25,24 @@ for _vc in /opt/dsh-rescue/vercmp.sh "$HERE/scripts/vercmp.sh" "$HERE/vercmp.sh"
 done
 command -v ver_gt >/dev/null 2>&1 || elog '[entrypoint] WARN vercmp.sh missing; seed version comparison disabled'
 
+# 把镜像内 seed 复制到挂载卷 /opt/dsh（步骤 ① 与 ② 共用）。
+# 【为什么不能直接 cp -a】容器内 root 只有 CHOWN/DAC_OVERRIDE/SETUID/SETGID，**没有 CAP_FOWNER**；
+# 而 /opt/dsh 里的文件在首次启动后已被步骤 ③ chown 给运行用户，对「不属于自己的」文件做
+# utimes/chmod 会 EPERM，cp 因此**返回非零** —— 在 set -e 下裸调用会直接杀掉 PID1，容器进入
+# 重启死循环（真机实测 2026-09-18：某 NAS 上 cp 的 chown 环节未生效，日志被
+# 'cp: preserving times ...: Operation not permitted' 刷满，cp 退出码为 1）。
+# 对策：先把属主收回 root（CHOWN 在白名单里），再 cp -a 保留属性；万一仍失败，退化为
+# 不保留属性的 cp -R —— 内容才决定 dsh 能否运行，元数据尽力而为。步骤 ③ 随后会把属主改回运行用户。
+seed_copy() {
+  mkdir -p /opt/dsh
+  chown -R 0:0 /opt/dsh 2>/dev/null || true
+  if ! cp -a /opt/dsh-seed/. /opt/dsh/ 2>/dev/null; then
+    elog '[entrypoint] WARN cp -a could not preserve attributes; retrying without them'
+    cp -R /opt/dsh-seed/. /opt/dsh/ 2>/dev/null \
+      || elog '[entrypoint] WARN seed copy reported errors; continuing with whatever is present'
+  fi
+}
+
 # ----------------------------------------------------------------------------
 # 首启 root 初始化 + 非 root 降权（容器安全加固第 2 步）
 #
@@ -90,13 +108,12 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
   if [ -n "$_reseed" ]; then
     elog "[entrypoint]   seeding dsh into /opt/dsh ($_reseed)"
     if [ -x /opt/dsh-seed/bin/dsh ]; then
-      # 从镜像内 seed 复制：离线、版本固定、秒级完成。
-      # 用 cp -a 覆盖（与 rescue dsh-reinstall 的离线兜底同一手法）：它不删除目标里多出的旧
-      # 文件，旧版独有的包目录会残留；但 dsh 按自己的 package.json 解析依赖，残留目录不会被
-      # 加载，故不做 rm —— 保留「复制失败时卷里仍有可用 dsh」的余地。
+      # 从镜像内 seed 复制：离线、版本固定、秒级完成（元数据容错见 seed_copy 的注释）。
+      # 不删除目标里多出的旧文件（旧版独有的包目录会残留；但 dsh 按自己的 package.json
+      # 解析依赖，残留目录不会被加载）—— 保留「复制失败时卷里仍有可用 dsh」的余地。
       elog "[entrypoint]   copying in-image seed (/opt/dsh-seed) to /opt/dsh"
-      mkdir -p /opt/dsh
-      cp -a /opt/dsh-seed/. /opt/dsh/
+      seed_copy
+      [ -x /opt/dsh/bin/dsh ] || elog '[entrypoint] WARN /opt/dsh/bin/dsh missing after seed copy'
       # 保留 /opt/dsh-seed：它位于镜像只读层，rm 无法释放镜像空间，且保留可让 rescue dsh-reinstall
       # 在主程序(/opt/dsh 卷)损坏且离线时从 seed 恢复（镜像版本）。重建容器也会重新可见。
     else
@@ -119,8 +136,7 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
     elog "[entrypoint]   preparing pnpm (required for plugin management) ..."
     if [ -x /opt/dsh-seed/bin/pnpm ]; then
       # dsh 段已复制过 seed 的话 pnpm 应已就位；这里兜底单独复制
-      mkdir -p /opt/dsh
-      cp -a /opt/dsh-seed/. /opt/dsh/
+      seed_copy
     elif [ -n "$NPM_REGISTRY" ]; then
       npm install -g pnpm --registry="$NPM_REGISTRY"
     else

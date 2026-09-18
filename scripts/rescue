@@ -304,7 +304,14 @@ case "$cmd" in
       rescue_log "npm reinstall offline unavailable; restore from image seed"
       echo 'npm 源不可达（离线）或重装失败，从镜像 seed 恢复（版本=镜像锁定版）：'
       mkdir -p /opt/dsh
-      cp -a /opt/dsh-seed/. /opt/dsh/
+      # 与 entrypoint 步骤 ① 同一手法（两处必须保持一致）：容器内 root 没有 CAP_FOWNER，
+      # 覆盖属于运行用户的文件时元数据操作会 EPERM，cp -a 会因此返回非零。
+      # 故先把属主收回 root，失败再退化为不保留属性的 cp -R。
+      chown -R 0:0 /opt/dsh 2>/dev/null || true
+      if ! cp -a /opt/dsh-seed/. /opt/dsh/ 2>/dev/null; then
+        echo 'WARN: cp -a 未能保留属性，改为直接复制内容（不影响版本）'
+        cp -R /opt/dsh-seed/. /opt/dsh/ 2>/dev/null || echo 'WARN: seed 复制报错，请检查 /opt/dsh'
+      fi
       echo 'restored from seed; restart container: docker restart dsh'
     else
       echo 'ERROR: reinstall failed and no seed; rebuild the image container (seed-less image)'

@@ -6,6 +6,40 @@
 
 ## [Unreleased]
 
+## [v0.4.11-dsh-0.1.6-alpha.2] - 2026-09-18
+
+> **紧急修复**：v0.4.10 引入的「镜像升级自动同步 dsh」在**部分环境（如 NAS）**下会让容器进入
+> **重启死循环**。若你已在跑 v0.4.10 且容器反复重启，请直接升到本版；或把 `DSH_IMAGE` 临时退回
+> `v0.4.9`（那一版没有自动同步，不会触发本问题）。
+
+### Fixed
+- **seed 复制在 chown 失效的环境下会杀掉 PID1**（真机复现 + 修复验证）。
+  容器内 root 只有 `CHOWN/DAC_OVERRIDE/SETUID/SETGID`，**没有 CAP_FOWNER**；而 `/opt/dsh` 里的
+  文件在首启后已被步骤 ③ chown 给运行用户，对「不属于自己的」文件做 utimes/chmod 会 EPERM。
+  v0.4.10 的步骤 ① 用的是裸 `cp -a`，于是 **cp 返回非零** —— 在 `set -e` 下直接终止 PID1；
+  compose 的 `restart: unless-stopped` 把它变成**死循环**，日志被
+  `cp: preserving times ...: Operation not permitted` 刷满。
+
+  真机 A/B（去掉 `CAP_CHOWN` 模拟 chown 失效，同一 node 属主卷 + 同一升旧版本号）：
+
+  | 镜像 | 结果 |
+  |---|---|
+  | v0.4.10 | **running=false, exit=1**，28166 条 preserving-times 错误 |
+  | 本版 | **running=true**，dsh 正常升到 `0.1.6-alpha.2`，一句 WARN 后走兜底 |
+
+  修复：seed 复制收敛为 `seed_copy()`（步骤 ① 与 ② pnpm 兜底共用）——先把属主收回 root
+  （CHOWN 在白名单里，这步安全），再 `cp -a` 保留属性；仍失败则退化为不保留属性的 `cp -R`
+  ——内容才决定 dsh 能否运行，元数据尽力而为。步骤 ③ 随后会把属主改回运行用户。
+  `rescue dsh-reinstall` 的离线 seed 恢复同源，一并处理。
+
+  > 注：此前那个「只有 `command -v dsh` 失败才复制」的旧逻辑**不会**踩到这个坑（升级时根本不复制），
+  > 是本版的自动同步把它带进了升级路径。
+
+### Tests
+- `test-seed-upgrade.sh` 增加断言：必须有 pre-chown 与 `cp -R` 兜底、**不得存在裸 `cp -a`**、
+  `seed_copy()` 的定义必须早于调用（POSIX shell 顺序执行，写在调用之后等于不存在）；
+  负向用例已验证会红。
+
 ## [v0.4.10-dsh-0.1.6-alpha.2] - 2026-09-18
 
 ### Added
