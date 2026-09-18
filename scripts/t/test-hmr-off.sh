@@ -39,6 +39,23 @@ awk '/^-[[:space:]]+id:[[:space:]]*hmr[[:space:]]*$/{f=1;next} f&&/^-[[:space:]]
 grep -q 'scripts/hmr-off.yml[[:space:]]*/opt/dsh-rescue/' "$DFILE" || fail dockerfile-missing-hmr-off-copy
 grep -q '/opt/dsh-rescue/hmr-off.yml' "$DFILE" || fail dockerfile-missing-hmr-off-crlf-fix
 
+# ---- 2b) 救援资产必须对非属主可读（否则 uid 1000 的 dsh/rescue 读不到）----
+# 真机实测 2026-09-18：COPY 保留源文件权限，而 umask 077 的构建机让 hmr-off.yml 在镜像内
+# 落成 0600 root —— entrypoint 的 --patch 直接被拒，关闭 HMR 的加固静默失效；而单测全绿，
+# 因为 git 只记录 644/755、正常 umask 下 checkout 出来恰好可读。故必须在 Dockerfile 里
+# 显式放开读权限，消除这个隐式依赖。
+grep -q 'chmod a+r /opt/dsh-rescue/' "$DFILE" || fail dockerfile-missing-rescue-assets-readable
+
+# ---- 2c) RUN 续行内不得出现注释行（会被 shell 当注释，吞掉其后命令）----
+# 血泪：给本用例加 chmod a+r 时就踩过 —— 注释写进续行，chmod a+r 与 ln -sf 整段被吃掉，
+# 镜像会静默丢掉 rescue 软链。
+if awk '
+  inrun && /^[[:space:]]*#/ { print "comment-in-run at line " NR ": " $0; bad = 1 }
+  /^RUN /  { inrun = ($0 ~ /\\$/); next }
+  inrun    { inrun = ($0 ~ /\\$/) }
+  END      { exit bad }
+' "$DFILE"; then :; else fail dockerfile-comment-inside-run-continuation; fi
+
 # ---- 3) entrypoint 必须解析叠加层路径（镜像内优先，仓库布局兜底）----
 grep -q '/opt/dsh-rescue/hmr-off.yml' "$ENTRY" || fail entrypoint-missing-hmr-off-path
 grep -q 'HMR_OFF_YML=' "$ENTRY" || fail entrypoint-missing-hmr-off-var
