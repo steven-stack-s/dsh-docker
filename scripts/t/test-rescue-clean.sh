@@ -443,22 +443,27 @@ DSH_HOME="$D/home" RESCUE_PROFILE=web sh -c ". '$LIB'; RESCUE_KEEP=5 rescue_snap
 [ -f "$D/home/.rescue/incidents/inc-1.json" ] || fail 'dryrun-full:fixture-incident-missing'
 
 # 用真实 CLI 走真实路径（NPM_CONFIG_CACHE 指向沙箱缓存树）
-dry_fp "$D" > "$D/fp.before"
-[ -s "$D/fp.before" ] || fail 'dryrun-full:empty-fingerprint'
+#
+# ⚠ 指纹文件必须写在**被指纹目录 $D 之外**（故用 $T）。
+#   原因：dry_fp 采样的 %s 含**目录自身的大小**，而目录 size 是否随条目数变化取决于文件系统 ——
+#   tmpfs 上目录 size 直接随条目数增长（40→60→80…），ext4 上则恒为 4096。
+#   把 fp.before 写进 $D，就是在两次采样之间给 $D 增加了一个条目：tmpfs 下 "." 的 size
+#   必然从 N 变成 N+20，于是 dry-run 明明毫无副作用却报 "filesystem-side-effect"。
+#   （写进 $D 再 grep 掉那两行只能剔除**条目行**，剔不掉它对父目录 size 的影响。）
+#   这类"只在 tmpfs 上假红"的用例极具误导性：CI 的 ext4 上常年绿，本地沙箱常年红。
+dry_fp "$D" > "$T/dryrun-fp.before"
+[ -s "$T/dryrun-fp.before" ] || fail 'dryrun-full:empty-fingerprint'
 set +e
 outdry=$(DSH_HOME="$D/home" RESCUE_PROFILE=web NPM_CONFIG_CACHE="$D/npmcache" sh "$RESCUE" clean -n 2>&1)
 rc_dry=$?
 set -e
 [ "$rc_dry" = 0 ] || fail "dryrun-full:exit-nonzero:rc=$rc_dry"
-dry_fp "$D" > "$D/fp.after"
-# 指纹文件自身是上面两条重定向建出来的，必须排除在比对之外，否则必然 diff。
-grep -v ' \./fp\.\(before\|after\)$' "$D/fp.before" > "$D/fp.before.clean"
-grep -v ' \./fp\.\(before\|after\)$' "$D/fp.after" > "$D/fp.after.clean"
+dry_fp "$D" > "$T/dryrun-fp.after"
 
 # 主断言：除审计日志外的整棵树指纹必须逐字节一致
-if ! diff -u "$D/fp.before.clean" "$D/fp.after.clean" > "$D/fp.diff" 2>&1; then
+if ! diff -u "$T/dryrun-fp.before" "$T/dryrun-fp.after" > "$T/dryrun-fp.diff" 2>&1; then
   echo '--- dry-run full-tree fingerprint diff (before vs after) ---'
-  cat "$D/fp.diff"
+  cat "$T/dryrun-fp.diff"
   fail 'dryrun-full:filesystem-side-effect'
 fi
 
