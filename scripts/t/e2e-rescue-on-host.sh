@@ -34,6 +34,10 @@
 #   注：若 diagnose 判定的是 remove-plugin（而非 rollback），本脚本的"回滚标记"不会出现；
 #   该路径的验收见 e2e-rescue-diagnose-on-host.sh 的 A 段。
 #
+#   6) 救生舱取证（问题 1+2）：用 `docker exec -e RESCUE=1` 起一次性执行，验证救生舱态下
+#      rescue doctor/status 会打 LIFEBOAT MODE 指引并报告 last-web-boot.log 状态。
+#      该步骤不重启容器、不改变其运行模式，对健康的 web 无影响。
+#
 # 退出码：0 = PASS（观察到回滚 + 恢复健康）；1 = FAIL/异常
 # ============================================================================
 set -eu
@@ -130,6 +134,33 @@ echo
 echo '== 结束：验收判定 =='
 docker logs "$CONTAINER" --since "$start_mark" --tail 200 2>/dev/null | grep -iE "rollback|restored|healthy|rescue" | tail -n20 | sed 's/^/  /' || true
 echo
+
+# ---------- 6) 救生舱取证（问题 1 + 问题 2）----------
+# 容器内 AI 进救生舱后必须做到两件事：看得到上一轮失败根因、被明确要求"由宿主侧重启"。
+# 直接以 RESCUE=1 起一个**一次性** exec（不是重启容器）：只验证 rescue 命令在救生舱态下的行为，
+# 不改变容器的实际运行模式，因此对当前健康的 web 没有任何影响（不进 lifeboat boot 路径）。
+log '== 6) 救生舱取证：rescue doctor 应看到崩溃输出 + LIFEBOAT MODE 指引 =='
+lb_out="$(docker exec -e RESCUE=1 "$CONTAINER" rescue doctor 2>&1 || true)"
+echo "$lb_out" | sed 's/^/    /' || true
+if echo "$lb_out" | grep -q 'LIFEBOAT MODE'; then
+  log '[OK] 6a: 救生舱态下 doctor 打印 LIFEBOAT MODE 行动指引（AI 据此去指挥宿主侧重启）'
+else
+  note '6a: doctor 未见 LIFEBOAT MODE 指引 —— 请人工核对（可能是旧镜像未包含本次改动）'
+fi
+if echo "$lb_out" | grep -q 'docker restart dsh'; then
+  log '[OK] 6b: 指引含宿主侧命令 docker restart dsh'
+else
+  note '6b: 指引未含 docker restart dsh'
+fi
+# 崩溃证据：正常模式下 web 是健康的，last-web-boot.log 里应当是最后一轮**成功**启动的输出
+# （失败输出只在真出现启动失败时才有）。故这里只断言"文件可读/可报告"，根因回显的严格断言在单测
+# （scripts/t/test-supervise-loop.sh C21）里用可控的桩完成。
+lb_file_out="$(docker exec -e RESCUE=1 "$CONTAINER" rescue status 2>&1 || true)"
+if echo "$lb_file_out" | grep -q 'last web boot output:'; then
+  log '[OK] 6c: status 报告 last-web-boot.log 状态（存在/行数或 none）'
+else
+  note '6c: status 未报告 last-web-boot.log —— 请人工核对'
+fi
 
 if [ "$rollback_seen" -eq 1 ] && [ "$healthy_seen" -eq 1 ]; then
   already_restored=1

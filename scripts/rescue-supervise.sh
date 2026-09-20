@@ -32,6 +32,11 @@ attempt_evdir() {
 }
 # 启动 dsh 子进程。RESCUE_DIAGNOSE_EVIDENCE=on 时尽力把输出 tee 到证据目录（同时保留容器日志）；
 # 任何环节失败都回退为普通子进程（绝不让证据捕获阻塞或拖垮监督）。回填 $child、$EVLOG(=dsh.log,可空)。
+#
+# 无论证据捕获是否可用，**本轮输出一律覆盖式落到 $LASTBOOT_FILE**（全量）：证据目录会按
+# RESCUE_EVIDENCE_KEEP 轮转、也可能因卷只读而建不出来，而救生舱里唯一能看到的崩溃证据就是这份文件。
+# 覆盖而非追加：每个 attempt 一轮，写满一卷对排查毫无帮助（旧轮的输出只会淹没最新一轮的根因）。
+# 注意 boot_lifeboat 直接 exec、不走本函数 —— 该文件因此永远保留"最后一次 web 启动失败"的输出。
 rescue_start_child() {
   EVLOG=''; tee_pid=''
   if [ "$RESCUE_DIAGNOSE_EVIDENCE" = on ]; then
@@ -61,10 +66,39 @@ rescue_start_child() {
     fi
   fi
   if [ -n "$EVLOG" ]; then
-    ( exec dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS >&3 2>&1 ) &
-    child=$!
+    # 【必须保持形态①】管道**第一个**命令的 stdout 就是 tee 的输入（tee 只从 stdin 读）。一旦把
+    # dsh 的 stdout 改成落盘文件，证据链 dsh.log 立刻变空 —— 归因自愈随即静默退化为 report-only
+    # （实测踩过，见下）。故 dsh 的 stdout 仍走 fd3（fifo->证据链），落盘改从 stderr 收。
+    # 【真机陷阱②】`( ... ) > "$LASTBOOT_FILE"`（分组后置重定向）在 dash 下**不管用**：dash 在
+    # 组内应用该重定向，组内的 1>&3 再把这同一个文件当成 3 号 fd 的来源，于是输出被写进了
+    # "该文件自己的 3 号 fd"。本机 /bin/sh 指向 bash 时一切正常、量产镜像里的 dash 下则恒为
+    # 0 字节 —— 典型的"本机全绿、真机失效"。对策：落盘 fd 必须在进入分组**之前**由外层打开
+    # （`{ ... } 4>"$LASTBOOT_FILE"`），组内只做 1>&3 2>&4 的复制。
+    # 达成的语义：dsh 的 stderr + 启动期 shell 报错进 last-web-boot.log，docker logs 侧仍由
+    # 证据链 tee 原样转发（stdout/stderr 都在里面）；代价是"正常 stdout"不落盘 —— 而崩溃根因
+    # 几乎总在 stderr，进救生舱要看的就是它。外层打不开文件时 dash 会让命令根本不执行并返回
+    # 失败（下方 if 因此判假），由 else 兜底。
+    if { ( exec dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS 1>&3 2>&4 ) & } \
+        4>"$LASTBOOT_FILE" 2>/dev/null; then
+      child=$!
+    else
+      # 落盘不可达：丢弃镜像输出，回退为纯证据链启动（证据链是归因的唯一输入，优先级更高）。
+      # 【为何是丢弃而不是 tee】tee 会把读取端挂在**同一个** fifo 上：两读端会瓜分字节，
+      # 证据 dsh.log 变成随机半份、归因能力静默失效。
+      mkdir -p "$RESCUE_DIR" 2>/dev/null || true
+      ( exec dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS >&3 2>&1 ) &
+      child=$!
+    fi
   else
-    dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS &
+    # 本轮唯一记录就是这份落盘（没有 tee 证据链）。$RESCUE_DIR 可能尚未存在（全新卷、或证据链
+    # 关闭且此前没有任何救援动作），而 dash 在重定向打不开文件时会让命令**根本不执行** ——
+    # 监督循环会一直空转到耗尽预算。故先尽力建目录；建不出来（只读卷）则退回纯容器日志。
+    if mkdir -p "$RESCUE_DIR" 2>/dev/null; then
+      dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS \
+        >"$LASTBOOT_FILE" 2>&1 &
+    else
+      dsh --profile "$RESCUE_PROFILE" $HMR_OFF_PATCH --port $PORT_INNER --no-open $TRUSTED_ARGS &
+    fi
     child=$!
   fi
 }
@@ -384,6 +418,10 @@ rescue_supervise() {
     kill "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
     rescue_close_ev
+    # 失败摘要回显到容器日志（docker logs 里仍要有根因的"第一眼"），全量留在 $LASTBOOT_FILE
+    # 供进救生舱后的 AI/用户离线排查 —— 那时进程已死、日志只剩这一份落盘。
+    echo '[entrypoint] last boot output (tail):'
+    tail -n 80 "$LASTBOOT_FILE" 2>/dev/null || true
     rescue_state_write_lastrun "{\"phase\":\"boot-fail\",\"ts\":\"$(rescue_ts)\",\"attempt\":\"$attempt\",\"abnormalExit\":false}" 2>/dev/null || true
   
     # ---- 归因判定：有证据文本 -> diagnose；无诊断能力/无证据 -> 走既有“回滚最新快照”兜底 ----

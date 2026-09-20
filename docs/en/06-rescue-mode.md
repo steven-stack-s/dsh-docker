@@ -72,9 +72,9 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 
 | Command | Behavior |
 |---|---|
-| `docker exec dsh rescue status` | List snapshots, current pointer, DSH version, last event log (read-only) |
+| `docker exec dsh rescue status` | List snapshots, current pointer, DSH version, last event log, and whether the last boot output was captured (read-only). **Inside the lifeboat it also prints a `LIFEBOAT MODE` action block** |
 | `docker exec dsh rescue snapshot` | Manually snapshot the current plugin tree (as a rollback target) |
-| `docker exec dsh rescue doctor` | Read-only diagnostics: profile dir + package.json, snapshot list |
+| `docker exec dsh rescue doctor` | Read-only diagnostics: profile dir + package.json, snapshot list, evidence/state/incident dir health, last run state, **tail of the last boot output** (plus the `LIFEBOAT MODE` block inside the lifeboat) |
 | `docker exec dsh rescue plugin add <pkg>` | Auto-snapshot first, then run `dsh plugin --profile web add <pkg>` (leave a rollback point before installing) |
 | `docker exec dsh rescue plugin remove <pkg>` | Same, to uninstall a plugin |
 | `docker exec dsh rescue snapshots` | Snapshot inventory: name / created / mode / **whether it differs from the live tree** / reason |
@@ -152,6 +152,7 @@ On top of auto-rollback, the entrypoint provides an **evidence-driven diagnosis 
 
 **Where evidence & incidents live** (inside the data volume `$DSH_HOME/.rescue/`):
 
+- `last-web-boot.log`: output of the **last** web boot (overwrite semantics) — the file that makes the root cause visible inside the lifeboat (see §5b).
 - `evidence/boot-<seq>-<ts>/`: each boot's dsh output (dsh.log) + temp fifo.
 - `incidents/inc-<ts>-<rand>.json`: attribution + self-heal actions + redline assertion for one incident; keep `RESCUE_INCIDENT_KEEP` (default 20).
 - `state/last-run.json`, `state/selfheal.json`: last run state / self-heal budget.
@@ -183,6 +184,42 @@ docker compose up -d
 ```
 
 > Lifeboat hard rule: never modify the existing `profiles/web/` or any user-data file; sessions/memory produced by lifeboat itself live under `profiles/lifeboat` and can be cleaned up later.
+
+### 5b. AI-assisted repair flow (getting work done inside the lifeboat)
+
+The lifeboat exists so that a human **or an AI agent** can repair things from the UI and then return to the normal profile. Agents tend to spin here: they **cannot return to the normal profile on their own**, because `RESCUE=1` is a **container environment variable** (unchangeable from inside), `.env` lives on the host and is not mounted, and there is no docker socket in the container (by design — do not weaken it). If the agent kills PID1, `restart: unless-stopped` brings the container back, it reads `RESCUE=1` again and lands in the lifeboat once more — a pointless loop.
+
+The correct flow:
+
+```text
+① confirm you are in the lifeboat   rescue status          # prints the LIFEBOAT MODE block
+② see why the last boot died        rescue doctor          # echoes the tail of last-web-boot.log
+③ repair profiles/web (drop a bad plugin, fix package.json, …)
+④ tell the user to run on the host  docker restart dsh
+```
+
+Key points:
+
+- **Inside the lifeboat, `rescue status` / `rescue doctor` print a `LIFEBOAT MODE` action block** that hands you the exact command from step ④. On seeing it, an agent should stop trying to restart anything and inform the user instead.
+- **Never `kill` PID1 and never try to restart the container from inside**: a restart just lands you back in the lifeboat.
+- The only way back to the normal profile is on the host:
+  ```bash
+  docker restart dsh                       # when .env has RESCUE=0
+  sed -i 's/^RESCUE=.*/RESCUE=0/' .env && docker compose up -d   # when .env has RESCUE=1
+  ```
+
+**Crash evidence on disk (`last-web-boot.log`).** Once the lifeboat is up the original dsh process is gone, and the container has neither a docker socket nor access to `docker logs` — so the real root cause (e.g. a `Cannot find module 'xxx'` stack) used to be invisible. The entrypoint supervisor loop therefore writes **every** web boot's output, overwriting, to:
+
+```text
+$DSH_HOME/.rescue/last-web-boot.log      # host default ./dsh/.rescue/last-web-boot.log
+```
+
+- Overwrite semantics (one file per boot attempt, not appended), so it never grows without bound and always holds the **last** attempt.
+- On every failed boot the container log (`docker logs dsh`) additionally echoes a `last boot output (tail):` block (last 80 lines by default), so you can locate the cause without opening the file.
+- The lifeboat itself never writes this file (`boot_lifeboat` `exec`s directly and uses the container's stdout), so the file always holds the **last failed web boot**.
+- Note: the file is primarily dsh **stderr** (crash stacks and module-resolution failures go to stderr); stdout still goes in full to the evidence chain `evidence/boot-*/dsh.log` and to `docker logs`.
+
+**Automatic fallback**: when the self-heal actions and their budget are both exhausted and boot still fails, the entrypoint writes a **one-shot** marker and exits; the next start boots the lifeboat profile (the marker is cleared on entry), so you at least get a UI instead of an endless crashloop. Once the plugin is fixed, a plain `docker restart dsh` returns you to the normal profile. Set `RESCUE_AUTO_LIFEBOAT=off` to disable the automatic fallback.
 
 ## 6. Disabling / Backup Tips
 

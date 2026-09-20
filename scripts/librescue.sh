@@ -11,6 +11,11 @@ RESCUE_DIR="$DSH_HOME/.rescue"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
 LOG_DIR="$RESCUE_DIR/log"
 LOG_FILE="$LOG_DIR/rescue.log"
+# 最近一轮 web 启动的**全量**输出（entrypoint 监督循环覆盖式写入，只留最后一轮）。
+# 为什么需要：监督循环里 `dsh ... &` 的崩溃输出只进容器 stdout（docker logs）；一旦自愈耗尽
+# 降级进 lifeboat，那个已经死掉的进程再也写不了日志，而容器内既无 docker socket 也无法读 docker logs
+# —— 真实根因（如 "Cannot find module 'xxx'" 堆栈）在救生舱里完全看不见。
+LASTBOOT_FILE="$RESCUE_DIR/last-web-boot.log"
 
 # HERE: 继承 source 方(如 rescue 已置为仓库根或 /opt/dsh-rescue)；否则尽力自定位。仅本地开发兜底用，镜像内 LIFEBOAT_TMPL 由 Dockerfile 恒置。
 HERE="${HERE:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
@@ -68,6 +73,40 @@ rescue_log() {
 
 profile_dir() { printf '%s/profiles/%s' "$DSH_HOME" "$RESCUE_PROFILE"; }
 rescue_dir() { printf '%s' "$RESCUE_DIR"; }
+
+# ---- 当前是否处于救生舱（lifeboat）----
+# 判据与 entrypoint 进舱的两条路径一一对应：
+#   RESCUE=1（显式/宿主机 .env）或 RESCUE_PROFILE=lifeboat（自动降级后的重启沿用 .env 里的 profile）。
+# 用途只有一个：让容器内的 AI/用户知道自己**无法自行回到正常 profile**（RESCUE 是容器环境变量、
+# .env 在宿主机、容器内没有 docker socket），从而在修完问题后去指挥宿主侧重启，而不是白费力气反复尝试。
+rescue_mode() {
+  if [ "${RESCUE:-0}" = "1" ] || [ "${RESCUE_PROFILE:-}" = "lifeboat" ]; then
+    printf 'lifeboat'
+  else
+    printf 'normal'
+  fi
+}
+
+# 上一轮 web 启动输出的尾部（$1=行数，默认 40）；文件不存在时无输出且返回 0（调用方多为只读诊断，
+# 不得因缺文件而失败）。文件由 entrypoint 的监督循环覆盖式写入，见 LASTBOOT_FILE 注释。
+rescue_lastboot_tail() {
+  tail -n "${1:-40}" "$LASTBOOT_FILE" 2>/dev/null || true
+}
+
+# 救生舱行动指引（输出到 stdout）。status 与 doctor 共用同一份文案：两处的指引一旦漂移，
+# 用户按其中一条操作就会踩坑（这条指引的全部价值就在于"照做即可"，不允许有两个版本）。
+rescue_lifeboat_guidance() {
+  printf '%s\n' \
+    '[LIFEBOAT MODE] 当前处于救生舱(干净 profile,无第三方插件,数据已保留)。' \
+    "上一轮失败输出已存: $LASTBOOT_FILE (用 rescue doctor 查看)" \
+    '修复 profiles/web 完成后请注意:' \
+    '- 容器内没有 docker socket,你无法自行重启容器;不要 kill PID1' \
+    '  (重启后仍会回到 lifeboat,只会白白循环)' \
+    '- 正确做法:完成后明确告诉用户,由用户在宿主机执行:' \
+    '    docker restart dsh' \
+    '  并确认宿主机 .env 中 RESCUE=0;若 .env 是 RESCUE=1,则执行:' \
+    "    sed -i 's/^RESCUE=.*/RESCUE=0/' .env && docker compose up -d"
+}
 
 next_snap_name() {
   mkdir -p "$RESCUE_DIR"

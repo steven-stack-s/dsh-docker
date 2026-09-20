@@ -36,6 +36,24 @@ for fn in rescue_ts attempt_evdir rescue_start_child rescue_close_ev rescue_evid
   command -v "$fn" >/dev/null 2>&1 || fail "function-missing:$fn"
 done
 
+# 救生舱态判定与崩溃证据读取（问题 1/2）：rescue CLI 与 entrypoint 都依赖它们，
+# 缺失时 rescue status/doctor 会整段失效 —— 而救生舱里正是最需要这段输出的时候。
+for fn in rescue_mode rescue_lastboot_tail rescue_lifeboat_guidance; do
+  command -v "$fn" >/dev/null 2>&1 || fail "function-missing:$fn"
+done
+[ "$(rescue_mode)" = normal ] || fail "rescue_mode-default-should-be-normal"
+[ "$(RESCUE=1 rescue_mode)" = lifeboat ] || fail "rescue_mode-RESCUE=1"
+[ "$(RESCUE_PROFILE=lifeboat rescue_mode)" = lifeboat ] || fail "rescue_mode-lifeboat-profile"
+# 证据文件缺失时必须静默返回（只读诊断不得因此报错），存在时按请求行数回吐尾部
+rescue_lastboot_tail 40 >/dev/null 2>&1 || fail "rescue_lastboot_tail-must-not-fail-without-file"
+mkdir -p "$RESCUE_DIR"
+printf 'a\nb\nc\n' > "$LASTBOOT_FILE"
+[ "$(rescue_lastboot_tail 2)" = "$(printf 'b\nc')" ] || fail "rescue_lastboot_tail-wrong-tail"
+rm -f "$LASTBOOT_FILE"
+[ -z "$(rescue_lastboot_tail 2)" ] || fail "rescue_lastboot_tail-missing-file-not-empty"
+rescue_lifeboat_guidance | grep -q 'LIFEBOAT MODE' || fail "guidance-missing-marker"
+rescue_lifeboat_guidance | grep -q 'docker restart dsh' || fail "guidance-missing-restart-cmd"
+
 # 纯函数抽查：时间戳格式 / budget 读自空 state / journal 追加
 ts=$(rescue_ts)
 echo "$ts" | grep -qE '^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\+[0-9]{4}$' || fail "rescue_ts-format:$ts"

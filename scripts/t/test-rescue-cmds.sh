@@ -66,6 +66,41 @@ echo "$doc" | grep -q 'evidence dir ok' || fail doctor-evidence
 echo "$doc" | grep -q 'state dir ok' || fail doctor-state
 echo "$doc" | grep -q 'last run: phase=healthy' || { echo "doc=$doc"; fail doctor-lastrun; }
 
+# --- lifeboat 指引（问题 1）：容器内 AI 修完问题后回不去，必须被明确告知去宿主机重启 ---
+# 前置：normal 态绝不打指引（否则用户会在正常模式下被告知"你无法重启容器"，纯属误导）。
+st_normal=$(sh "$RESCUE" status)
+echo "$st_normal" | grep -q 'LIFEBOAT MODE' && { echo "$st_normal"; fail status-normal-shows-lifeboat-hint; }
+doc_normal=$(sh "$RESCUE" doctor)
+echo "$doc_normal" | grep -q 'LIFEBOAT MODE' && { echo "$doc_normal"; fail doctor-normal-shows-lifeboat-hint; }
+# RESCUE=1 进舱后：status 与 doctor 都要打指引，且必须给出宿主机命令与"不要 kill PID1"的禁令
+st_lb=$(RESCUE=1 sh "$RESCUE" status)
+echo "$st_lb" | grep -q 'LIFEBOAT MODE' || { echo "$st_lb"; fail status-lifeboat-missing-hint; }
+echo "$st_lb" | grep -q 'docker restart dsh' || { echo "$st_lb"; fail status-lifeboat-missing-restart-cmd; }
+echo "$st_lb" | grep -q '不要 kill PID1' || { echo "$st_lb"; fail status-lifeboat-missing-no-kill-pid1; }
+doc_lb=$(RESCUE=1 sh "$RESCUE" doctor)
+echo "$doc_lb" | grep -q 'LIFEBOAT MODE' || { echo "$doc_lb"; fail doctor-lifeboat-missing-hint; }
+echo "$doc_lb" | grep -q 'docker restart dsh' || { echo "$doc_lb"; fail doctor-lifeboat-missing-restart-cmd; }
+# 自动降级路径（自愈耗尽后 RESCUE_PROFILE=lifeboat）同样要认出来 —— 两条进舱路径都得覆盖
+st_lb2=$(RESCUE=0 RESCUE_PROFILE=lifeboat sh "$RESCUE" status)
+echo "$st_lb2" | grep -q 'LIFEBOAT MODE' || { echo "$st_lb2"; fail status-lifeboat-profile-missing-hint; }
+# status 必须报告崩溃证据文件的存在与行数（只读，不写状态）
+echo "$st_normal" | grep -q 'last web boot output:' || { echo "$st_normal"; fail status-missing-bootlog-line; }
+
+# --- 崩溃证据落盘（问题 2）：doctor 必须回显上一轮失败输出的尾部 ---
+# 这份文件是救生舱里唯一能看到真实根因的地方（容器内无 docker socket，读不到 docker logs）。
+printf 'line1\nError: Cannot find module %s\ntail-marker-lastboot\n' "'dsh-host-directory-picker-browse'" > "$DSH_HOME/.rescue/last-web-boot.log"
+doc_boot=$(sh "$RESCUE" doctor)
+echo "$doc_boot" | grep -q 'last web boot output (tail):' || { echo "$doc_boot"; fail doctor-missing-bootlog-header; }
+echo "$doc_boot" | grep -q 'Cannot find module' || { echo "$doc_boot"; fail doctor-missing-bootlog-body; }
+echo "$doc_boot" | grep -q 'tail-marker-lastboot' || { echo "$doc_boot"; fail doctor-missing-bootlog-tail; }
+# 只读命令不得改动证据文件（红线：status/doctor 不写任何状态）
+[ "$(cat "$DSH_HOME/.rescue/last-web-boot.log")" = "$(printf 'line1\nError: Cannot find module %s\ntail-marker-lastboot\n' "'dsh-host-directory-picker-browse'")" ] \
+  || fail doctor-mutated-bootlog
+# 文件不存在时不得报错，且要明确指出"没有"
+rm -f "$DSH_HOME/.rescue/last-web-boot.log"
+doc_nb=$(sh "$RESCUE" doctor) || { echo "$doc_nb"; fail doctor-fails-without-bootlog; }
+echo "$doc_nb" | grep -q 'last web boot output: (none)' || { echo "$doc_nb"; fail doctor-missing-none-marker; }
+
 # --- verify: 完好快照必须通过（快照完整性 P0-6）---
 if ! sh "$RESCUE" verify >/tmp/rescue-verify.out 2>&1; then
   cat /tmp/rescue-verify.out

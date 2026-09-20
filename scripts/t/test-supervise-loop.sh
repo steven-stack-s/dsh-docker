@@ -34,6 +34,10 @@ case "${STUB_DSH_MODE:-ok}" in
   noisy) echo "[stub-dsh] plugin @scope/bad failed to load"; sleep 5; exit 0 ;;
   flood) i=0; while [ "$i" -lt 400 ]; do echo "[stub-dsh] line $i padding padding padding"; i=$((i+1)); done; echo "[stub-dsh] FINAL-MARKER"; sleep 5; exit 0 ;;
   pluginquoted) echo '[stub-dsh] plugin "@scope/bad" failed to load'; sleep 5; exit 0 ;;
+  # 崩溃根因通常走 stderr（Node 未捕获异常的堆栈、模块解析失败都是 stderr）——C21 用它验证
+  # last-web-boot.log 真的收得到根因，而不是"文件存在但是空的"。
+  crashmsg)  echo '[stub-dsh] stdout-noise'; echo 'STUB-CRASH-ROOTCAUSE: Cannot find module "@scope/bad"' 1>&2; sleep 5; exit 0 ;;
+  crashmsg2) echo 'STUB-CRASH-SECOND: different failure' 1>&2; sleep 5; exit 0 ;;
   crash) exit 3 ;;
 esac
 STUB
@@ -167,6 +171,35 @@ evd=$(ls -1dt "$DSH_HOME"/.rescue/evidence/boot-* 2>/dev/null | head -n1)
 [ -s "$evd/dsh.log" ] || { echo 'FAIL-c7-evidence-empty'; exit 1; }
 grep -q 'FINAL-MARKER' "$evd/dsh.log" \
   || { echo "FAIL-c7-evidence-lost-tail($(wc -c < "$evd/dsh.log") bytes)"; exit 1; }
+
+# ---------------------------------------------------------------- C21
+# 崩溃证据落盘（问题 2）：进救生舱后原进程已死、容器内又没有 docker socket，读不到 docker logs ——
+# 唯一能看到真实根因的地方就是 $RESCUE_DIR/last-web-boot.log（由监督循环覆盖式写入）。
+# 这条断言同时钉死两个**真机踩过**的坑：
+#   a) 证据链(tee)已经持有 dsh 的 stdout，若再把 stdout 改成落盘文件，dsh.log 立刻变空、
+#      自愈归因静默退化 —— 故必须两条都要有内容（上面 C7 与下面这条同时成立才算对）；
+#   b) dash 下 `( ... ) > FILE` 这种"分组后置重定向"不生效（本机 bash 上却正常，属"本机全绿、
+#      真机失效"），故落盘 fd 由外层 `{ ... } 4>FILE` 在进入分组前打开。
+run_supervise "$T/c21.log" RESCUE_PROBE="$T/probe-fail.js" RESCUE_DIAG='' \
+  RESCUE_DIAGNOSE_EVIDENCE=on RESCUE_AUTO=off STUB_DSH_MODE=crashmsg
+lb="$DSH_HOME/.rescue/last-web-boot.log"
+[ -f "$lb" ] || { echo 'FAIL-c21-no-lastboot-file'; show "$T/c21.log"; exit 1; }
+grep -q 'STUB-CRASH-ROOTCAUSE' "$lb" \
+  || { echo "FAIL-c21-lastboot-missing-rootcause($(wc -c < "$lb") bytes: $(cat "$lb"))"; show "$T/c21.log"; exit 1; }
+# 失败时容器日志里也要有摘要回显（docker logs 是用户的第一现场）
+grep -q 'last boot output (tail):' "$T/c21.log" \
+  || { echo 'FAIL-c21-no-container-log-summary'; show "$T/c21.log"; exit 1; }
+# 覆盖式语义：再来一轮必须覆盖上一轮，不得无限增长（旧轮输出只会淹最新一轮的根因）
+run_supervise "$T/c21b.log" RESCUE_PROBE="$T/probe-fail.js" RESCUE_DIAG='' \
+  RESCUE_DIAGNOSE_EVIDENCE=on RESCUE_AUTO=off STUB_DSH_MODE=crashmsg2
+grep -q 'STUB-CRASH-SECOND' "$lb" || { echo "FAIL-c21-not-overwritten: $(cat "$lb")"; exit 1; }
+grep -q 'STUB-CRASH-ROOTCAUSE' "$lb" && { echo 'FAIL-c21-append-instead-of-overwrite'; exit 1; }
+# 无诊断证据能力（RESCUE_DIAGNOSE_EVIDENCE=off）时也必须落盘：这条路径没有 tee，
+# 若只在 EVLOG 分支里落盘，救生舱里同样会看不到任何根因。
+run_supervise "$T/c21c.log" RESCUE_PROBE="$T/probe-fail.js" RESCUE_DIAG='' \
+  RESCUE_DIAGNOSE_EVIDENCE=off RESCUE_AUTO=off STUB_DSH_MODE=crashmsg
+grep -q 'STUB-CRASH-ROOTCAUSE' "$lb" \
+  || { echo "FAIL-c21-no-evidence-path-not-logged($(wc -c < "$lb") bytes)"; show "$T/c21c.log"; exit 1; }
 
 # ---------------------------------------------------------------- C19
 # RESCUE_KEEP 此前一配置三语义（快照保留数 / 证据保留数 / 启动重试上限），改一个会连带改另外两个。

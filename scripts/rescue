@@ -35,6 +35,17 @@ case "$cmd" in
     echo "RESCUE_DIR=$RESCUE_DIR  KEEP=$RESCUE_KEEP  profile=$(profile_dir)"
     echo 'snapshots:'
     rescue_snapshot_list_by_time | sed 's#.*/\(snap-[0-9]*\)#  \1#'
+    # 上一轮 web 启动输出是否落盘（只读：只 stat/计数，不写任何状态）。
+    # 说清"有没有、多少行"而不是打印内容：status 是速览入口，正文交给 rescue doctor。
+    if [ -f "$LASTBOOT_FILE" ]; then
+      echo "last web boot output: $LASTBOOT_FILE ($(wc -l < "$LASTBOOT_FILE" 2>/dev/null | tr -d ' ') lines)"
+    else
+      echo "last web boot output: (none) $LASTBOOT_FILE"
+    fi
+    # 救生舱态要显式点破"你回不去"：容器内 AI 会本能地反复重启/重试，白耗一整轮排查。
+    if [ "$(rescue_mode)" = lifeboat ]; then
+      rescue_lifeboat_guidance
+    fi
     echo 'last log:'
     tail -n5 "$LOG_FILE" 2>/dev/null || true
     ;;
@@ -54,6 +65,18 @@ case "$cmd" in
       echo "last run: phase=$_lp"
     else
       echo 'last run: none'
+    fi
+    # 崩溃证据（问题 2）：把上一轮 web 启动输出的尾部打出来 —— 这是救生舱里唯一能看到的真实根因
+    # （容器内没有 docker socket，读不到 docker logs）。只读、不写任何状态；文件不存在时保持静默。
+    if [ -f "$LASTBOOT_FILE" ]; then
+      echo 'last web boot output (tail):'
+      rescue_lastboot_tail 40
+    else
+      echo "last web boot output: (none) $LASTBOOT_FILE"
+    fi
+    # 救生舱行动指引（问题 1）：与 status 共用同一份文案，避免两处漂移。
+    if [ "$(rescue_mode)" = lifeboat ]; then
+      rescue_lifeboat_guidance
     fi
     echo 'read-only diagnostic done'
     ;;
