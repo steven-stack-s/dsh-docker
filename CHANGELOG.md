@@ -6,6 +6,58 @@
 
 ## [Unreleased]
 
+## [v0.4.12-dsh-0.1.6-alpha.2] - 2026-09-20
+
+### Added
+- **救生舱（lifeboat）里的 AI 行动指引**：`rescue status` / `rescue doctor` 检测到救生舱态时，
+  追加一段 `LIFEBOAT MODE` 指引块，明确给出"修复完成后由用户在宿主机执行
+  `docker restart dsh`"的命令，并说明**不要 `kill` PID1**。
+  背景：容器内 AI 在救生舱里修完问题后无法自行回到正常 profile —— `RESCUE=1` 是容器环境变量
+  （容器内改不了）、`.env` 在宿主机未挂载、容器内没有 docker socket（安全设计，不破坏）。
+  若它去 `kill` PID1，`restart: unless-stopped` 拉起后读到的仍是 `RESCUE=1`，只会再次进救生舱，
+  白耗一整轮排查。
+- **崩溃证据落盘 `last-web-boot.log`**：监督循环把每轮 web 启动的输出覆盖式写入
+  `$DSH_HOME/.rescue/last-web-boot.log`，启动失败时额外在容器日志回显 `tail -80` 摘要；
+  `rescue doctor` 可回显其尾部。背景：进救生舱后原进程已死、容器内又读不到 `docker logs`，
+  真实根因（如 `Cannot find module 'xxx'` 堆栈）此前完全看不见。
+- **`TMPDIR` 临时文件根目录**（`/data/dsh/tmp`）：dsh 的工具输出溢出、命令输出 spool、
+  工作区变更捕获都走 `os.tmpdir()`，随之从 tmpfs `/tmp` 迁到数据卷。
+- **`RESCUE_TMP_KEEP_MIN`**：`rescue clean` 回收 `TMPDIR` 下 dsh 临时产物时的保留窗口
+  （分钟，默认 1440 = 24h）。阈值内视为"可能仍在使用"，绝不删。
+- `rescue clean` 新增临时产物回收项；`rescue doctor` 报出当前 `TMPDIR` 与 dsh 临时目录数量；
+  `rescue export` 的环境白名单纳入 `TMPDIR`。
+
+### Fixed
+- **`/tmp` 被"临时任务 / 验证测试"写满**。根因：compose 的 `read_only: true` 让 `/tmp` 只能用
+  tmpfs，而它是**内存硬上限**（128m）；dsh 三处都往 `os.tmpdir()` 写，单次大输出即可撞满 ——
+  工具输出溢出（读大文件 / 大范围搜索）、被托管命令的输出 spool（构建 / 测试动辄几十上百 MB）、
+  工作区变更捕获。且 dsh 自身的回收都不可靠：溢出文件只在**启动时**扫一次、默认只清 30 天前的
+  （`cleanupPeriodDays` 默认 30）；命令 spool 只在进程退出时 `rmdirSync`（非空目录删不掉，
+  上游代码自己注明要等 "external cleanup"）。于是产物只增不减。
+  对策：`TMPDIR` 指向数据卷（`os.tmpdir()` 在 Node 里尊重 `TMPDIR`，三个模块自动跟随，
+  **不需要改上游一行代码**），空间上限从"128m 内存"变成宿主机磁盘；回收由 `rescue clean` 兜底
+  （dsh 自身清理时机不可靠，故由救援命令接管）。`/tmp` 的 tmpfs **保留不动** —— 原生插件绑定
+  要 `dlopen`，需要 `exec`，撤掉会让只读根 FS 下的 `/tmp` 不可写而直接起不来。
+
+  回收的**安全边界**：只删白名单前缀且名字形如 `mkdtemp`（前缀 + 恰好 6 位字母数字）的一级目录
+  （`dsh-spill-*` / `dsh-subprocess-*` / `dsh-subprocess-launch-*` / `dsh-workspace-changes-*` /
+  `dsh-shell-*` / `dsh-XXXXXX`）。刻意**不删** `dsh-office-to-pdf-*`、`dsh-open-in-app-*`、
+  `libreoffice-kit-*` 等转换中间产物（可能正被使用），也不碰用户放在 `TMPDIR` 里的任何东西 ——
+  宁可少删，绝不误删。
+
+> **升级提示（重要）**：`TMPDIR` 从 `/tmp` 移走后，`/tmp` 下**已遗留**的 `dsh-*` 目录不会再被
+> 任何人扫描（dsh 的清理扫描基准也跟着 `TMPDIR` 走），会永久占着那 128m。首次升级后请手动清一次：
+> ```bash
+> docker exec dsh sh -c 'rm -rf /tmp/dsh-spill-* /tmp/dsh-subprocess-* /tmp/dsh-workspace-changes-* /tmp/dsh-shell-*'
+> ```
+
+### Changed
+- `rescue doctor` 输出新增 `last web boot output (tail)` 与 `tmp dir` / `tmp dsh dirs` 两节；
+  `rescue status` 新增上一轮启动输出是否落盘的报告（均为只读，不写任何状态）。
+- 文档：[06 · 救援模式](docs/zh-CN/06-救援模式.md) 新增 §4c「临时文件回收」与 §5b「AI 自助修复流程」；
+  [07 · 环境变量速查](docs/zh-CN/07-环境变量速查.md) 补 `TMPDIR` / `RESCUE_TMP_KEEP_MIN`
+  并更正"只读根 FS"段（`/tmp` 不再是 dsh 临时文件的主要落点）。
+
 ## [v0.4.11-dsh-0.1.6-alpha.2] - 2026-09-18
 
 > **紧急修复**：v0.4.10 引入的「镜像升级自动同步 dsh」在**部分环境（如 NAS）**下会让容器进入
