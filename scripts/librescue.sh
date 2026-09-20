@@ -858,3 +858,114 @@ rescue_clean_rescue_history() {
   printf 'rescue history: prune incomplete (evidence rc=%s, incidents rc=%s)\n' "$_ch_ev" "$_ch_in"
   return 1
 }
+
+# C5：TMPDIR 下的 dsh 临时产物（Dockerfile 把 TMPDIR 指到数据卷后由本项回收）。
+#
+# 【为什么必须由 rescue 兜底】dsh 自己三处都会往 os.tmpdir() 写，且回收都不可靠：
+#   - dsh-spill-local       仅**启动时**扫一次，且 cleanupPeriodDays 默认 30（30 天前的才清）
+#   - dsh-subprocess-local  只在进程退出时 rmdirSync —— 非空目录删不掉；上游代码自己注明
+#                           "retained ... until an external cleanup"，即它把回收责任推给了外部
+#   - dsh-workspace-changes 变更捕获，无保留策略
+# 三者都不落盘到固定位置、也没有 TTL 强制，长期运行的容器只会越积越多。
+#
+# 【安全边界（红线）】只删**本函数自建的目录名清单**里、且匹配 mkdtemp 六位随机后缀的条目：
+#   dsh-spill-XXXXXX / dsh-subprocess-XXXXXX / dsh-subprocess-launch-XXXXXX /
+#   dsh-workspace-changes-XXXXXX / dsh-shell-XXXXXX / dsh-XXXXXX
+# 刻意不删的：
+#   - dsh-office-to-pdf-* / dsh-open-in-app-* / libreoffice-kit-*：Office/文件转换的中间产物，
+#     删除时可能正被使用，且不属"临时任务/验证测试"的主因；
+#   - 任何不可识别的条目（含用户在 TMPDIR 里放的东西）——宁可少删，绝不误删。
+# 与上游 dsh-spill-local 的 DEFAULT_ROOT_RE 同款精确匹配（^prefix[6 位字母数字]$），
+# 因此 `dsh-spill-test-*` 这类测试夹具不会被误伤。
+#
+# 【陈旧判定用 -mmin 而非 -atime】上游 spill 的会话目录会随活动更新 mtime；用 mtime 既能覆盖
+# "写完后放着不管"的主场景，又不需要依赖挂载选项（noatime 会让 atime 永远不动，反而不安全）。
+# 默认阈值 1440 分钟（24h），可用 RESCUE_TMP_KEEP_MIN 调。
+#
+# 输出格式与其它 C 项一致（dry-run 打印将删什么，--yes 打印实际结果），失败必须如实回吐。
+rescue_tmp_roots() {
+  # 打印 TMPDIR 下"属于 dsh 且形如 mkdtemp"的一级目录（每行一个）。不打印=无可清理项。
+  # 【为何不用一条 dsh-* 通配就够】前缀彼此重叠（dsh-subprocess-* 同时匹配 dsh-*），
+  # 单次遍历 + case 校验即可；这里刻意不做多模式 glob 展开，避免同一目录被打印多次。
+  _tr_base="${TMPDIR:-/tmp}"
+  [ -d "$_tr_base" ] || return 0
+  for _tr_d in "$_tr_base"/*; do
+    [ -d "$_tr_d" ] || continue
+    _tr_name=${_tr_d##*/}
+    # 精确 mkdtemp 形状：白名单前缀 + 恰好 6 位字母数字（与上游 dsh-spill-local 的
+    # DEFAULT_ROOT_RE 同款）。用 case 而非 grep，纯 shell、无外部依赖。
+    case "$_tr_name" in
+      dsh-spill-*)              _tr_suf=${_tr_name#dsh-spill-} ;;
+      dsh-subprocess-launch-*)  _tr_suf=${_tr_name#dsh-subprocess-launch-} ;;
+      dsh-subprocess-*)         _tr_suf=${_tr_name#dsh-subprocess-} ;;
+      dsh-workspace-changes-*)  _tr_suf=${_tr_name#dsh-workspace-changes-} ;;
+      dsh-shell-*)              _tr_suf=${_tr_name#dsh-shell-} ;;
+      # 裸 dsh-<6位>（上游 `mkdtemp(join(tmpdir(), "dsh-"))`）——必须放在其它 dsh-xxx-* 之后，
+      # 但它们前缀不同（dsh- 后面直接跟后缀），case 分支互不干扰。
+      dsh-*)                    _tr_suf=${_tr_name#dsh-} ;;
+      *) continue ;;
+    esac
+    case "$_tr_suf" in
+      ??????) case "$_tr_suf" in *[!A-Za-z0-9]*) continue ;; esac ;;
+      *) continue ;;
+    esac
+    printf '%s\n' "$_tr_d"
+  done
+}
+
+rescue_clean_tmp() {
+  _ct_dry="${1:-1}"
+  _ct_base="${TMPDIR:-/tmp}"
+  _ct_keep="${RESCUE_TMP_KEEP_MIN:-1440}"
+  if [ ! -d "$_ct_base" ]; then
+    rescue_log "clean: TMPDIR absent ($_ct_base)"
+    printf 'tmp: %s absent (nothing to clean)\n' "$_ct_base"
+    return 0
+  fi
+  _ct_n=0; _ct_sz=0; _ct_fail=0
+  # 候选 = 白名单目录 ∩ 陈旧（mtime 超过 _ct_keep 分钟）。
+  # 【为何不写 `find ... | while read`】那样会把结果留在管道子 shell 里，且 while 内再调用
+  # rescue_tmp_roots（本身也做命令替换）会让变量彻底丢失 —— 实测 _ct_cand 恒为空、
+  # 于是"有东西可清"却报告"没有"（静默不清理，比报错更难发现）。这里用 for 直接展开。
+  _ct_seen=''
+  for _ct_d in $(rescue_tmp_roots); do
+    [ -d "$_ct_d" ] || continue
+    # 陈旧判定：mmin 需要整数分钟，find -mmin 是这里唯一可靠的"多久未写"口径
+    # （-atime 受 noatime 挂载影响会永远不动）。用 find 单目录判定，避免再引入管道。
+    if [ -n "$(find "$_ct_d" -maxdepth 0 -mmin +"$_ct_keep" 2>/dev/null)" ]; then
+      _ct_seen="$_ct_seen $_ct_d"
+    fi
+  done
+  if [ -z "$_ct_seen" ]; then
+    if [ "$_ct_dry" = 1 ]; then
+      printf 'tmp: %s - no expired dsh temp dirs (keep>%smin)\n' "$_ct_base" "$_ct_keep"
+    else
+      printf 'tmp: %s - no expired dsh temp dirs removed (keep>%smin)\n' "$_ct_base" "$_ct_keep"
+    fi
+    return 0
+  fi
+  for _ct_d in $_ct_seen; do
+    [ -d "$_ct_d" ] || continue
+    _ct_b=$(rescue_dir_size_bytes "$_ct_d")
+    _ct_n=$((_ct_n + 1)); _ct_sz=$((_ct_sz + _ct_b))
+    if [ "$_ct_dry" = 1 ]; then
+      printf 'tmp expired: %s (%s B)\n' "${_ct_d##*/}" "$_ct_b"
+    elif rm -rf "$_ct_d" 2>/dev/null; then
+      rescue_log "clean: removed tmp dir ${_ct_d##*/} ($_ct_b B)"
+      printf 'tmp expired: %s removed (%s B)\n' "${_ct_d##*/}" "$_ct_b"
+    else
+      # 删除失败只记失败，绝不打印 removed（避免假成功日志）
+      _ct_fail=1
+      rescue_log "clean: failed to remove tmp dir ${_ct_d##*/}"
+      printf 'tmp expired: %s removal FAILED (%s B)\n' "${_ct_d##*/}" "$_ct_b"
+    fi
+  done
+  if [ "$_ct_dry" = 1 ]; then
+    printf 'tmp: %s - %s entr%s reclaimable, %s B\n' "$_ct_base" "$_ct_n" \
+      "$([ "$_ct_n" = 1 ] && printf y || printf ies)" "$_ct_sz"
+  else
+    printf 'tmp: %s - %s entr%s removed, %s B\n' "$_ct_base" "$_ct_n" \
+      "$([ "$_ct_n" = 1 ] && printf y || printf ies)" "$_ct_sz"
+  fi
+  [ "$_ct_fail" = 0 ]
+}

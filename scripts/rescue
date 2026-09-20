@@ -78,6 +78,13 @@ case "$cmd" in
     if [ "$(rescue_mode)" = lifeboat ]; then
       rescue_lifeboat_guidance
     fi
+    # 临时目录概况（只读）：/tmp 曾因 tmpfs 128m 硬顶被"临时任务/验证测试"写满，而 dsh 自己
+    # 几乎不回收。这里报出当前 TMPDIR 指向哪、有多少可清理的陈旧 dsh 产物（不动任何文件；
+    # 实际清理走 `rescue clean --yes`）。
+    _doc_tmp="${TMPDIR:-/tmp}"
+    echo "tmp dir: $_doc_tmp"
+    _doc_n=$(rescue_tmp_roots 2>/dev/null | wc -l | tr -d ' ')
+    echo "tmp dsh dirs: $_doc_n (stale ones reclaimable via 'rescue clean --yes'; keep>${RESCUE_TMP_KEEP_MIN:-1440}min)"
     echo 'read-only diagnostic done'
     ;;
   plugin)
@@ -126,7 +133,9 @@ case "$cmd" in
       echo "uname: $(uname -a 2>/dev/null)"
       echo "profile: $RESCUE_PROFILE"
       echo "--- rescue env (whitelist; secrets are never included) ---"
-      env | grep -E '^(RESCUE_|SOCAT_MAX_CHILDREN=)' | sort 2>/dev/null || true
+      # TMPDIR 也纳入白名单：它是"临时任务写满"类事故的关键环境事实（Dockerfile 已把它指到
+      # 数据卷），排查时需要一眼看到它到底指向哪。它是路径、不含密钥。
+      env | grep -E '^(RESCUE_|TMPDIR=|SOCAT_MAX_CHILDREN=)' | sort 2>/dev/null || true
     } > "$_etmp/rescue/environment.txt" 2>/dev/null
     sh "$SELF" doctor > "$_etmp/rescue/doctor.txt" 2>&1 || true
     _evlast=$(ls -1dt "$(evidence_dir)"/boot-* 2>/dev/null | head -n1)
@@ -178,6 +187,10 @@ case "$cmd" in
       rescue_clean_pnpm_store 1 || true
       pdir=$(profile_dir)
       rescue_clean_pnpm_orphans "$pdir" 1 || true
+      # TMPDIR 下的 dsh 临时产物（Dockerfile 已把 TMPDIR 指到数据卷）。dsh 自身的回收时机
+      # 不可靠（spill 只在启动时清 30 天前的；subprocess 只在进程退出时 rmdir 空目录），
+      # 故由本命令兜底。dry-run 只报告，不删。
+      rescue_clean_tmp 1 || true
       echo 'clean: rescue history rotation skipped in dry-run'
       echo 'clean: dry-run complete — nothing was changed'
       exit 0
@@ -214,6 +227,7 @@ case "$cmd" in
     rescue_clean_npm_cache 0 || clean_failed="$clean_failed npm-cache"
     rescue_clean_pnpm_store 0 || clean_failed="$clean_failed pnpm-store"
     rescue_clean_pnpm_orphans "$pdir" 0 || clean_failed="$clean_failed pnpm-orphans"
+    rescue_clean_tmp 0 || clean_failed="$clean_failed tmp"
     rescue_clean_rescue_history || clean_failed="$clean_failed rescue-history"
     if [ -n "$clean_failed" ]; then
       echo "clean: WARN some cleanup steps failed:$clean_failed"

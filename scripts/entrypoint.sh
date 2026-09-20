@@ -185,6 +185,21 @@ if [ "$(id -u)" = 0 ] && [ "$RUN_USER_ID" != 0 ] && [ -z "${DSH_INIT_DONE:-}" ];
   mkdir -p "$NPM_CONFIG_CACHE"
   chown -R "$RUN_USER_ID:$RUN_GROUP_ID" "$NPM_CONFIG_CACHE" 2>/dev/null || true
 
+  # ④b 临时文件根目录（TMPDIR，见 Dockerfile 的 ENV 说明）：必须落在**可写的挂载卷**上。
+  #     镜像层里建不出来（/data/dsh 是运行期挂载卷，镜像里 mkdir 会被卷覆盖），故在此首启时建，
+  #     并把属主交给运行用户 —— 否则 dsh 以 uid 1000 跑时 mkdtemp 直接 EACCES，临时任务全挂。
+  #     仅当 TMPDIR 确实指向本卷时才处理：用户可在 .env 里改成别处，不应被这里的默认值绑死。
+  case "${TMPDIR:-}" in
+    /data/dsh/*)
+      mkdir -p "$TMPDIR" 2>/dev/null || elog "[entrypoint]   WARN cannot create TMPDIR=$TMPDIR (volume read-only?)"
+      chown "$RUN_USER_ID:$RUN_GROUP_ID" "$TMPDIR" 2>/dev/null || true
+      chmod u+rwx "$TMPDIR" 2>/dev/null || true
+      elog "[entrypoint]   TMPDIR=$TMPDIR ready (owner $RUN_USER_ID:$RUN_GROUP_ID; cleanup via 'rescue clean')"
+      ;;
+    '') : ;;
+    *) elog "[entrypoint]   WARN TMPDIR=$TMPDIR is outside /data/dsh; ensure it is writable and persists" ;;
+  esac
+
   # ⑤ 预置 web profile manifest（只写 bundles）。
   #    【2026-09-18 换版本时变更】DSH 0.1.6-alpha.2 起 profile manifest 的 `patchReload`
   #    字段被**完全移除**（dsh-app-boot 源码里已无任何引用；实测新建 web profile 也不再写入它），

@@ -94,7 +94,7 @@ Run on the host with `docker exec dsh rescue ...` (or directly `rescue ...` insi
 | `docker exec dsh rescue report --json` | Emit incidents as valid JSON (for scripting) |
 | `docker exec dsh rescue incident list` | List recorded incident ids |
 | `docker exec dsh rescue snapshot --reason '<text>'` | Manual snapshot with trigger context (e.g. `--reason 'plugin add @scope/x'`) for later attribution |
-| `docker exec dsh rescue clean [--yes]` | Clean up leftovers after upgrades (dry-run preview by default; `--yes` applies and snapshots first) |
+| `docker exec dsh rescue clean [--yes]` | Clean up leftovers after upgrades (dry-run preview by default; `--yes` applies and snapshots first). Includes reclaiming dsh temp artifacts under `TMPDIR` (see §4c) |
 
 > After installing/removing/rolling back plugins, run `docker restart dsh` so the entrypoint boots with the new plugin tree; if boot fails, the entrypoint auto-rolls back (see §4).
 
@@ -160,6 +160,35 @@ On top of auto-rollback, the entrypoint provides an **evidence-driven diagnosis 
 Review one incident: `docker exec dsh rescue report <id>`; the output includes `rootCause.rationale` (why it judged so) and `redline.cordisPatchTouched=false` (asserts cordis.patch.yml was not touched this round).
 
 > Calibration note: the log patterns used for attribution are the top-of-file data constants `PLUGIN_FAIL_PATTERNS` in `/opt/dsh-rescue/diagnose.js`. The order is "**first** match the plugin-failure patterns, **then** extract the offending package name" — so an unrelated log line that merely mentions a package name is not mistaken for a plugin failure.
+
+## 4c. Temp-file reclamation (rescue clean)
+
+**Background**: `read_only: true` forces `/tmp` onto tmpfs, which is a **hard in-memory cap** (128m in this repo). While running **temporary tasks / verification tests**, dsh writes three kinds of artifacts into `os.tmpdir()`:
+
+- tool-output spill (results of reading large files or broad searches)
+- managed-command output spool (build/test output is easily tens to hundreds of MB)
+- workspace-change capture
+
+A single large output can fill 128m. Worse, dsh's own reclamation is unreliable: spill files are swept only **at startup** and only when older than 30 days by default; the command spool only `rmdir`s at process exit (which cannot remove a non-empty directory — upstream notes it waits for an "external cleanup"). Artifacts therefore only accumulate.
+
+**Fix**: `TMPDIR` defaults to the data volume `/data/dsh/tmp` (see《[07 · Environment Variables](07-environment-variables.md)》), turning the ceiling from "128m of memory" into host disk space; reclamation is handled by:
+
+```bash
+docker exec dsh rescue doctor          # read-only: shows the current TMPDIR and dsh temp-dir count
+docker exec dsh rescue clean           # dry-run: lists stale dirs that would be reclaimed (changes nothing)
+docker exec dsh rescue clean --yes     # apply
+```
+
+**Safety boundary** (only these are deleted; everything else is left alone):
+
+- Only first-level dirs **from dsh's own name list** whose name matches the `mkdtemp` shape (prefix + exactly 6 alphanumerics): `dsh-spill-*` / `dsh-subprocess-*` / `dsh-subprocess-launch-*` / `dsh-workspace-changes-*` / `dsh-shell-*`.
+- `dsh-office-to-pdf-*`, `dsh-open-in-app-*`, `libreoffice-kit-*` and anything else you keep in `TMPDIR` are **never** touched — better to under-delete than to delete the wrong thing.
+- Only **stale** entries: dirs written within `RESCUE_TMP_KEEP_MIN` (default 1440 minutes = 24h) are treated as possibly in use and kept.
+
+> Before migrating: once `TMPDIR` moves away from `/tmp`, any `dsh-*` directories **already left behind** in `/tmp` will never be scanned again (dsh's cleanup base follows `TMPDIR` too). Clean them once by hand before switching:
+> ```bash
+> docker exec dsh sh -c 'rm -rf /tmp/dsh-spill-* /tmp/dsh-subprocess-* /tmp/dsh-workspace-changes-* /tmp/dsh-shell-*'
+> ```
 
 ## 5. Lifeboat
 

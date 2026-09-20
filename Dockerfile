@@ -68,6 +68,26 @@ ENV DSH_HOME=/data/dsh
 # （如需保留缓存语义，可改用 NARB_NATIVE_CACHE_DIR 指向卷内可执行目录。）
 ENV NARB_DISABLE_NATIVE_CACHE=1
 
+# 临时文件根目录：从 tmpfs /tmp 迁到数据卷（真机故障修复 2026-09-20）。
+# 【问题】compose 的 `read_only:true` 让 /tmp 只能用 tmpfs，而它是**内存硬上限** —— 本仓库
+#   取 128m（compose 的 tmpfs 行）。dsh 做临时任务/验证测试时会写三类产物，全部走
+#   os.tmpdir()（即 /tmp），单次大输出就能撞满 128m：
+#     - dsh-spill-local      工具输出超预算后溢出（读大文件/大范围搜索的典型结果）
+#     - dsh-subprocess-local 被托管命令的输出 spool（构建/测试输出动辄几十上百 MB）
+#     - dsh-workspace-changes 工作区变更捕获
+#   更糟的是三者的回收都很弱：spill-local 只在**启动时**扫一次、且默认只清 30 天前的
+#   （cleanupPeriodDays 默认 30）；subprocess 的清理只在进程退出时 rmdirSync（非空目录删不掉，
+#   代码自己注明 "retained ... until an external cleanup"）。于是产物只增不减。
+# 【对策】TMPDIR 指向数据卷 —— os.tmpdir() 在 Node 里尊重 TMPDIR，三个模块会自动跟随，
+#   不需要改上游一行代码；空间上限从"128m 内存"变成"宿主机磁盘"。回收交给 `rescue clean`
+#   （见 librescue.sh 的 rescue_clean_tmp）：dsh 自身的清理时机不可靠，故由救援命令兜底。
+# 【为何 /tmp 的 tmpfs 不能撤】原生插件绑定要 dlopen，需要 exec —— 撤掉 tmpfs 会让
+#   read_only 下的 /tmp 不可写而直接起不来（真机教训见上一条 ENV 的注释）。TMPDIR 迁移后
+#   /tmp 只剩少量系统级 mktemp，故 compose 的 128m 保持不动即可。
+# 注意：目录不在这里创建 —— /data/dsh 是运行期挂载卷，镜像层里 mkdir 会被卷覆盖掉，
+#   实际由 entrypoint 首启整备（属主 + 权限）负责建出来。
+ENV TMPDIR=/data/dsh/tmp
+
 # 时区（可用 .env 覆盖）
 ENV TZ=Asia/Shanghai
 

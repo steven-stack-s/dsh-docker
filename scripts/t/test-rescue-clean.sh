@@ -659,4 +659,104 @@ printf '%s' "$out21" | grep -qi 'WARN\|失败\|failed' \
 export DSH_HOME="$T/home"
 . "$LIB"
 
+# ============================================================================
+# 18) TMPDIR 临时产物清理（真机故障 2026-09-20）
+#
+# 背景：compose 的 `read_only:true` 让 /tmp 只能用 tmpfs，且是 128m 的**内存硬上限**。
+# dsh 做临时任务/验证测试时会把三类产物写进 os.tmpdir()（=TMPDIR）：
+#   dsh-spill-*（工具输出溢出）/ dsh-subprocess-*（命令输出 spool）/ dsh-workspace-changes-*（变更捕获）
+# 而 dsh 自身的回收都不可靠：spill 只在启动时清 30 天前的；subprocess 只在进程退出时 rmdirSync
+# （非空目录删不掉，上游注明 "retained ... until an external cleanup"）。
+# 故 Dockerfile 把 TMPDIR 指到数据卷，回收交给 rescue clean —— 本组用例守护它。
+#
+# 最重要的断言是**安全边界**：只删白名单前缀且形状正确（mkdtemp 六位字母数字）的目录，
+# 绝不误删用户在 TMPDIR 里放的东西，也绝不碰在用的转换中间产物。
+# ============================================================================
+command -v rescue_clean_tmp >/dev/null 2>&1 || fail 'tmp:function-missing'
+command -v rescue_tmp_roots >/dev/null 2>&1 || fail 'tmp:roots-function-missing'
+
+TB="$T/tmpbase"
+rm -rf "$TB"; mkdir -p "$TB"
+export TMPDIR="$TB"
+# 陈旧的白名单目录（-mmin 用 mtime，故用 touch -d 造时间）
+mkdir -p "$TB/dsh-spill-AbC123" "$TB/dsh-subprocess-XyZ789" \
+         "$TB/dsh-subprocess-launch-LaNcH1" "$TB/dsh-workspace-changes-QwErTy" "$TB/dsh-shell-ShEll1"
+echo junk > "$TB/dsh-spill-AbC123/spilled.bin"
+# 新鲜的白名单目录：绝不能被删（阈值内 = 可能仍在使用）
+mkdir -p "$TB/dsh-spill-FrEsH1"
+echo fresh > "$TB/dsh-spill-FrEsH1/active.bin"
+# 非白名单 / 形状不符：绝不能被删
+# 【为何用变量而不是把字面量抄两遍】先前这里创建名与断言名各写一次，其中一处大小写写错
+# （KEep34 vs Keep34），断言就失败在"目录被删了"的假象上 —— 实际是名字根本不匹配。
+# 名字只写一次，从根上消掉这类"测试自己骗自己"的失败。
+KEEP_OFFICE='dsh-office-to-pdf-Keep12'   # 转换中间产物，可能正被使用 -> 刻意不纳入
+KEEP_OPENIN='dsh-open-in-app-Keep34'     # 同上
+KEEP_FIXTURE='dsh-spill-test-fixture'    # 测试夹具：后缀非 6 位纯字母数字
+KEEP_SHORT='dsh-spill-AbC12'             # 后缀只有 5 位
+KEEP_FOREIGN='user-own-data'             # 完全不相关
+mkdir -p "$TB/$KEEP_OFFICE" "$TB/$KEEP_OPENIN" "$TB/$KEEP_FIXTURE" "$TB/$KEEP_SHORT" "$TB/$KEEP_FOREIGN"
+echo keep > "$TB/$KEEP_FOREIGN/precious.txt"
+# 只有"陈旧"的才可回收
+touch -d '3 days ago' "$TB"/dsh-spill-AbC123 "$TB"/dsh-subprocess-XyZ789 \
+  "$TB"/dsh-subprocess-launch-LaNcH1 "$TB"/dsh-workspace-changes-QwErTy "$TB"/dsh-shell-ShEll1
+
+# --- 18a) 候选识别：白名单 + 形状正确才入选，且不得重复打印 ---
+roots=$(rescue_tmp_roots)
+printf '%s\n' "$roots" | grep -q 'dsh-spill-AbC123' || fail 'tmp:roots-missed-spill'
+printf '%s\n' "$roots" | grep -q 'dsh-subprocess-XyZ789' || fail 'tmp:roots-missed-subprocess'
+printf '%s\n' "$roots" | grep -q 'dsh-workspace-changes-QwErTy' || fail 'tmp:roots-missed-workspace-changes'
+printf '%s\n' "$roots" | grep -q 'dsh-shell-ShEll1' || fail 'tmp:roots-missed-shell'
+[ "$(printf '%s\n' "$roots" | grep -c 'dsh-spill-AbC123')" = 1 ] || fail 'tmp:roots-duplicated'
+printf '%s\n' "$roots" | grep -q 'dsh-office-to-pdf' && fail 'tmp:roots-included-office'
+printf '%s\n' "$roots" | grep -q 'dsh-open-in-app' && fail 'tmp:roots-included-open-in-app'
+printf '%s\n' "$roots" | grep -q 'test-fixture' && fail 'tmp:roots-included-fixture'
+printf '%s\n' "$roots" | grep -q 'dsh-spill-AbC12$' && fail 'tmp:roots-included-short-suffix'
+printf '%s\n' "$roots" | grep -q 'user-own-data' && fail 'tmp:roots-included-foreign-dir'
+
+# --- 18b) dry-run 必须只报告、不删任何东西 ---
+out_tmp=$(rescue_clean_tmp 1)
+printf '%s' "$out_tmp" | grep -q 'reclaimable' || { echo "$out_tmp"; fail 'tmp:dryrun-no-reclaimable-summary'; }
+[ -d "$TB/dsh-spill-AbC123" ] || fail 'tmp:dryrun-deleted-dir'
+[ -f "$TB/$KEEP_FOREIGN/precious.txt" ] || fail 'tmp:dryrun-deleted-foreign-file'
+
+# --- 18c) 实际清理：只删陈旧的白名单项，其余一律保留 ---
+rescue_clean_tmp 0 >/dev/null 2>&1 || fail 'tmp:apply-failed'
+for d in dsh-spill-AbC123 dsh-subprocess-XyZ789 dsh-subprocess-launch-LaNcH1 \
+         dsh-workspace-changes-QwErTy dsh-shell-ShEll1; do
+  [ -d "$TB/$d" ] && fail "tmp:stale-not-removed:$d"
+done
+[ -d "$TB/dsh-spill-FrEsH1" ] || fail 'tmp:removed-fresh-dir'
+[ -f "$TB/dsh-spill-FrEsH1/active.bin" ] || fail 'tmp:removed-fresh-content'
+[ -d "$TB/$KEEP_OFFICE" ] || fail 'tmp:removed-office-conversion'
+[ -d "$TB/$KEEP_OPENIN" ] || fail 'tmp:removed-open-in-app'
+[ -d "$TB/$KEEP_FIXTURE" ] || fail 'tmp:removed-test-fixture'
+[ -d "$TB/$KEEP_SHORT" ] || fail 'tmp:removed-short-suffix'
+[ -f "$TB/$KEEP_FOREIGN/precious.txt" ] || fail 'tmp:removed-foreign-file'
+
+# --- 18d) 阈值可配：调成 0 时新鲜目录也应可回收 ---
+mkdir -p "$TB/dsh-spill-NoW123"; echo x > "$TB/dsh-spill-NoW123/f"
+RESCUE_TMP_KEEP_MIN=0 rescue_clean_tmp 0 >/dev/null 2>&1 || fail 'tmp:threshold0-failed'
+[ -d "$TB/dsh-spill-NoW123" ] && fail 'tmp:threshold0-not-honoured'
+
+# --- 18e) TMPDIR 不存在时不得失败（只读诊断/精简环境） ---
+TMPDIR="$T/does-not-exist" rescue_clean_tmp 1 >/dev/null 2>&1 || fail 'tmp:absent-dir-should-not-fail'
+unset TMPDIR 2>/dev/null || true
+export TMPDIR="$TB"
+
+# --- 18f) CLI 集成：clean --dry-run 必须报告 tmp 项；--yes 必须真删 ---
+mkdir -p "$TB/dsh-spill-Cli001"; echo cli > "$TB/dsh-spill-Cli001/f"
+touch -d '3 days ago' "$TB/dsh-spill-Cli001"
+cli_dry=$(sh "$RESCUE" clean --dry-run 2>&1)
+printf '%s' "$cli_dry" | grep -q 'tmp expired: dsh-spill-Cli001' \
+  || { echo "$cli_dry"; fail 'tmp:cli-dryrun-missing-tmp-report'; }
+[ -d "$TB/dsh-spill-Cli001" ] || fail 'tmp:cli-dryrun-deleted'
+cli_yes=$(sh "$RESCUE" clean --yes 2>&1)
+printf '%s' "$cli_yes" | grep -q 'dsh-spill-Cli001 removed' \
+  || { echo "$cli_yes"; fail 'tmp:cli-yes-did-not-remove'; }
+[ -d "$TB/dsh-spill-Cli001" ] && fail 'tmp:cli-yes-left-dir-behind'
+
+# --- 18g) 红线：整个 tmp 清理流程绝不动插件树与用户数据 ---
+[ "$before_pkg" = "$(cksum < "$P/package.json")" ] || fail 'REDLINE-tmp-clean-package.json-modified'
+[ "$before_lock" = "$(cksum < "$P/pnpm-lock.yaml")" ] || fail 'REDLINE-tmp-clean-lockfile-modified'
+
 echo 'ALL-PASS'

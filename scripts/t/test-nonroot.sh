@@ -49,6 +49,15 @@ for v in /opt/dsh /data/dsh /workspace; do
   grep -qF "$v" "$ENTRY" || fail "entrypoint-missing-volume-$v"
 done
 grep -q 'NPM_CONFIG_CACHE' "$ENTRY" || fail entrypoint-missing-npm-cache
+# TMPDIR 整备（真机故障 2026-09-20）：Dockerfile 把 TMPDIR 指到数据卷 /data/dsh/tmp，
+# 而镜像层里建不出它（/data/dsh 是运行期挂载卷，镜像内 mkdir 会被卷覆盖）——
+# 必须在 entrypoint 首启时创建并把属主交给运行用户，否则 dsh 以 uid 1000 跑时
+# mkdtemp 直接 EACCES，临时任务/验证测试全挂。
+grep -qF 'TMPDIR' "$ENTRY" || fail entrypoint-missing-tmpdir
+grep -qF '/data/dsh/*' "$ENTRY" || fail entrypoint-tmpdir-not-scoped-to-volume
+grep -q 'chown "$RUN_USER_ID:$RUN_GROUP_ID" "$TMPDIR"' "$ENTRY" || fail entrypoint-tmpdir-not-chowned
+# TMPDIR 的默认值必须来自 Dockerfile（镜像层兜底），compose 可覆盖
+grep -qE '^ENV TMPDIR=/data/dsh/tmp' "$DFILE" || fail dockerfile-missing-tmpdir-env
 grep -q 'chown' "$ENTRY" || fail entrypoint-missing-chown
 # read_only 下必须关闭 profile 的 HMR。关闭手段在 2026-09-18（升 DSH 0.1.6-alpha.2）已换代：
 # 从"改 profile manifest 的 patchReload 字段"改为"启动时注入 --patch 叠加层"。原因见

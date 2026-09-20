@@ -118,6 +118,14 @@ services:
       - SOCAT_MAX_CHILDREN=${SOCAT_MAX_CHILDREN:-64}
       # 凭据文件（docker secret / 挂载文件）：优先于 DEEPSEEK_API_KEY 环境变量
       - DEEPSEEK_API_KEY_FILE=${DEEPSEEK_API_KEY_FILE:-}
+      # 临时文件根目录：从 tmpfs /tmp（硬上限 128m）迁到数据卷，消除"临时任务写满 /tmp"。
+      # dsh 的 spill / subprocess spool / workspace-changes 都走 os.tmpdir()，随之迁移；
+      # 回收由 `docker exec dsh rescue clean` 负责（dsh 自身的清理时机不可靠）。
+      # 改动前请先清掉 /tmp 下遗留的 dsh-* 目录 —— 迁移后它们不再被任何人扫描。
+      - TMPDIR=${TMPDIR:-/data/dsh/tmp}
+      # `rescue clean` 回收 TMPDIR 下 dsh 临时产物时保留多少分钟内的（默认 1440=24h）。
+      # 阈值内的目录视为"可能仍在使用"，绝不删；调小更激进（如 60），调大更保守。
+      - RESCUE_TMP_KEEP_MIN=${RESCUE_TMP_KEEP_MIN:-1440}
 
     volumes:
       # DSH 程序本体（npm 全局包 + dsh/pnpm 命令）——升级与插件管理写入这里

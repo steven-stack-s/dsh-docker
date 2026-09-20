@@ -36,6 +36,8 @@ need to be touched by most users. To customize, **pick one** of the two override
 | `RESCUE_SNAPSHOT_MODE` | `hardlink` | `hardlink` = `cp -al` (seconds, almost free, but shares inodes with live tree — **any in-place rewrite contaminates history**; run `rescue verify` to detect). `copy` = `cp -a` (truly immutable, at the cost of full `node_modules` duplication). |
 | `RESCUE_SELFHEAL_WINDOW` | `86400` | Sliding window (seconds) for self-heal budgets. Within the window, auto actions count toward the cap; once the window expires, the counters reset. |
 | `RESCUE_AUTO_LIFEBOAT` | `on` | Whether to auto-degrade into the lifeboat after self-heal has exhausted its budget. |
+| `TMPDIR` | `/data/dsh/tmp` | Temp-file root. **Defaults to the data volume** instead of the tmpfs `/tmp` (which is capped at 128m and fills up while dsh runs temporary tasks / verification tests). dsh's tool-output spill, command-output spool and workspace-change capture all use `os.tmpdir()` and follow this. Reclaim with `rescue clean`. |
+| `RESCUE_TMP_KEEP_MIN` | `1440` | Retention window (minutes) for `rescue clean` when reclaiming dsh temp artifacts under `TMPDIR`. Anything newer is treated as possibly in use and never deleted. |
 
 See [06 · Rescue Mode](06-rescue-mode.md). While debugging, set `RESCUE_AUTO=off` and `RESCUE_SELFHEAL=off` so the
 system only diagnoses and writes incidents.
@@ -76,6 +78,10 @@ Since v0.4.6 the image runs as a **non-root** user and tightens capabilities + r
   `cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]`. These four are only needed for first-boot
   `chown` of the volumes and `setpriv` uid drop; runtime dsh/agent processes (uid 1000) lack them.
 - **Read-only root FS**: `read_only: true` + `tmpfs /tmp` (128m). Only volumes and /tmp are writable.
+  **dsh's own temp files do not go to /tmp**: `TMPDIR` defaults to the data volume `/data/dsh/tmp`
+  (see `TMPDIR` in §1) — /tmp is a hard 128m in-memory cap that fills quickly while dsh runs
+  temporary tasks / verification tests, and after the move /tmp only holds a few system-level
+  temp files.
   `NPM_CONFIG_CACHE` defaults to `/opt/dsh/.npm-cache` (inside a writable volume, created and `chown`ed
   to the run user on first boot; usable by both root `docker exec npm` and the node user) so
   `npm install -g` upgrades and rescue cleaning still work.
