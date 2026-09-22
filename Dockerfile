@@ -180,7 +180,10 @@ FROM base AS runtime
 # 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
 # 注意：alpha 版本必须写全版本号 —— latest/next 都拿不到它。
 ARG DSH_VERSION=0.1.7-alpha.1
-ARG PNPM_VERSION=latest
+# pnpm 同样钉死：latest 会在不同时间解析到不同版本（实测 2026-09-22 为 12.5.1），
+# 与 DSH_VERSION 的漂移风险同理 —— 同一份 Dockerfile 不该构建出不同的 pnpm。
+# 要升级改这一处，或构建时传 --build-arg PNPM_VERSION=<版本>。
+ARG PNPM_VERSION=12.5.1
 
 # 预装 dsh + pnpm 到 /opt/dsh-seed（非挂载路径，运行时不被卷遮蔽）。
 # entrypoint 在挂载卷 /opt/dsh 为空时，把 seed 整体复制过去 → 首次启动即就绪、离线可用、版本固定。
@@ -191,6 +194,10 @@ ARG PNPM_VERSION=latest
 #      下载占大头）；配合 CI 的 gha scope=base 缓存，跨发版也能复用其内容。
 #   ② /root/.npm 被 cache mount 挂载覆盖，**其内容不写入镜像层**——所以这里【不做】 rm -rf /root/.npm：
 #      镜像已天然不含 npm 缓存（原修剪目的由 cache mount 实现），在 RUN 里删反而因挂载忙报错。
+# 失败重试一次：npm registry 的瞬时故障（超时 / 连接重置 / 5xx）不该让整条发布流水线红灯，
+# 而 buildx 只回传最后一行错误 —— 重试既提高成功率，也让失败时日志里能看到两次尝试。
 RUN --mount=type=cache,target=/root/.npm \
     NPM_CONFIG_PREFIX=/opt/dsh-seed \
-    npm install -g @deepseek-ai/dsh@${DSH_VERSION} pnpm@${PNPM_VERSION}
+    npm install -g @deepseek-ai/dsh@${DSH_VERSION} pnpm@${PNPM_VERSION} \
+    || (echo '[seed] npm install failed (attempt 1); retrying once' && sleep 5 \
+        && npm install -g @deepseek-ai/dsh@${DSH_VERSION} pnpm@${PNPM_VERSION})
