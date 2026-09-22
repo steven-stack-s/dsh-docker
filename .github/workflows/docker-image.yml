@@ -61,6 +61,9 @@ jobs:
             else
               echo FAIL
               cat /tmp/unit-test.out
+              # job log 需要认证才能下载，而 annotations 对公开仓库可匿名读取 —— 把失败脚本名
+              # 与尾部输出做成 annotation，红灯原因不必登录即可定位。
+              echo "::error title=unit-test FAILED: $(basename "$f")::$(tail -6 /tmp/unit-test.out | tr '\n' '~' | cut -c1-500)"
               fail=1
             fi
           done
