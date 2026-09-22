@@ -44,7 +44,9 @@ out=$(run_case tag v1.0.0-dsh-0.2.0) || { echo 'FAIL-tag4-rc'; exit 1; }
 # ---- Br1 ----
 out=$(run_case branch main) || { echo 'FAIL-br1-rc'; exit 1; }
 [ "$(field "$out" tags)" = "ghcr.io/steven-stack-s/dsh-docker:main" ] || { echo "FAIL-br1-tags: $out"; exit 1; }
-[ "$(field "$out" dsh_version)" = "latest" ] || { echo "FAIL-br1-dsh: $out"; exit 1; }
+# 分支构建的 dsh 版本改取仓库锁定的 ARG DSH_VERSION（不再跟随 npm latest，见脚本内注释）。
+PINNED=$(sed -n 's/^ARG DSH_VERSION=\(.*\)$/\1/p' "$HERE/../../Dockerfile" | head -n1)
+[ "$(field "$out" dsh_version)" = "$PINNED" ] || { echo "FAIL-br1-dsh: $out (want $PINNED)"; exit 1; }
 
 # ---- Br2：其他分支不得占用 :main ----
 out=$(run_case branch feature/x) || { echo 'FAIL-br2-rc'; exit 1; }

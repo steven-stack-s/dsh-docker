@@ -54,7 +54,14 @@ case "$REF_TYPE" in
       SUFFIX="branch-$(printf '%s' "$slug" | cut -c1-80)"
     fi
     TAGS="${REGISTRY}/${IMAGE_LOWER}:${SUFFIX}"
-    DSH_VERSION="latest"
+    # 分支构建**不再跟随 npm 的 latest**：2026-09-22 实测 npm 上 latest(=0.1.5-rc.2) 的依赖图
+    # 引用了未发布的 @deepseek-ai/dsh-client-ui-sidebar-documentpreview@^0.1.5-rc.3，
+    # `npm install -g @deepseek-ai/dsh@latest` 直接 ETARGET 失败 —— main 构建因此长期红灯，
+    # 且 :main 镜像的内容与"跟随最新"这个标签含义脱节。改为用仓库自己锁定的版本
+    # （Dockerfile 的 ARG DSH_VERSION）：可复现、与 tag 镜像内容一致。
+    HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    DSH_VERSION=$(sed -n 's/^ARG DSH_VERSION=\(.*\)$/\1/p' "$HERE/../Dockerfile" | head -n1)
+    [ -n "$DSH_VERSION" ] || { echo "ci-image-tags: cannot read ARG DSH_VERSION from Dockerfile" >&2; exit 1; }
     PROJ_VERSION=""
     ;;
 esac

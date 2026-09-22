@@ -121,9 +121,12 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ steps.meta.outputs.proj_version }}
             org.opencontainers.image.dsh-version=${{ steps.meta.outputs.dsh_version }}
-          # 缓存只对 tag 构建启用：分支构建的 DSH_VERSION 恒为字符串 "latest"，若复用缓存，
-          # npm install -g @deepseek-ai/dsh@latest 那一层会命中旧缓存、不再跟随 npm 上的最新版本。
-          # no-cache 在 【分支构建】 才为 true；tag 构建（github.ref_type == 'tag'）永远 false → 缓存生效。
+          # 缓存策略：tag 构建启用 gha 缓存；分支构建当前 no-cache（保守选择）。
+          # 历史理由已作废：分支构建的 DSH_VERSION 曾恒为字符串 "latest"，复用缓存会让
+          # `npm install -g @deepseek-ai/dsh@latest` 那层命中旧缓存、不再跟随 npm 最新版。
+          # 自 2026-09-22 起分支构建也改用 Dockerfile 的 ARG DSH_VERSION（原因见
+          # scripts/ci-image-tags.sh：npm 上 latest=0.1.5-rc.2 的依赖图引用了未发布的子包版本，
+          # 直接 ETARGET 失败），内容可复现，故复用缓存本已安全 —— no-cache 仅保留为保守选择。
           #
           # 【跨 tag 缓存复用】gha 缓存默认 scope 是当前 ref（每个 tag 各自隔离），于是 v0.4.x 与
           # v0.4.(x+1) 之间底层（apt 装包、node 基础、rescue 工具、entrypoint）无法复用，
