@@ -25,14 +25,10 @@
   表的 `alpha` 行、CHANGELOG 最新版本段落**四处与它一致**。
 
 ### Notes
-- 0.1.7 的契约变更**集中在插件侧**，本机实测记录见
-  `issues/2026-09-22-dsh-0.1.7-alpha.1-适配分析.md`（含 §九 实测执行记录）：
-  - 客户端服务 `settingsScope` 被上游移除（新实现为 `configForms`）→ `@xgone/dsh-remote`、
-    `dsh-connect-trae` 的 client 插件会一直 `pending`；
-  - 设置页 slot 改名（`settings.plugin.item` → `plugins.item`、`plugins.row.config` → `plugins.bundle.config`）；
-  - Session V4 拒收 `source.kind === "plugin"` 的旧包壳 → 注入消息的插件必须改用生产者自有 kind
-    （如 `plugin:<name>`）；`dsh-free-search` 还需处理 `dsh-settings` 不再导出 `SettingsProvider`。
-  以上均为**插件侧适配**，不在镜像职责内；镜像只负责版本锁定与文档记录。
+- 0.1.7 的契约变更集中在**插件侧**（客户端设置服务、设置页 slot 名、Session V4 的消息来源、
+  图标命名）。插件适配不属于本仓库职责 —— 镜像只负责版本锁定与部署文档；受影响插件清单与
+  修法记录在工作区（非本仓库）`/workspace/code/docs/dsh-0.1.7-升级与插件适配-完整记录-20260922.md`。
+
 ## [v0.4.12-dsh-0.1.6-alpha.2] - 2026-09-20
 
 ### Added
