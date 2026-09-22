@@ -167,19 +167,19 @@ FROM base AS runtime
 # 构建时锁定的 dsh / pnpm 版本。用 build-arg 覆盖即可换版本：--build-arg DSH_VERSION=1.2.3
 #
 # 【为什么不用 latest】npm 的 dist-tag 是发布者手动指定的别名，**不会自动前进**。
-# 当前三个 tag 的实测指向（2026-09-18 核对 npm dist-tags）：
+# 当前三个 tag 的实测指向（2026-09-22 核对 npm dist-tags）：
 #   latest -> 0.1.5-rc.2    （稳定推荐版，落后于 alpha）
-#   next   -> 0.1.5-rc.2    （更新的候选版）
-#   alpha  -> 0.1.6-alpha.2 （本镜像锁定的版本）
-# 注：latest 曾长期停在 0.1.5-rc.1（rc.2 发布时只推进 next），现已跟上 rc.2；
-#     无论它指向谁，都**拿不到 0.1.6**（alpha 线只挂在 alpha tag 下）。
+#   next   -> 0.1.5-rc.3    （更新的候选版）
+#   alpha  -> 0.1.7-alpha.1 （本镜像锁定的版本）
+# 注：alpha 线始终跑在 latest/next 之前（0.1.6-alpha.2 → 0.1.7-alpha.1）；
+#     无论 latest 指向谁，都**拿不到 alpha 线**（alpha 只挂在 alpha tag 下）。
 # 用 latest 会带来两个真问题：
 #   1) 与 docker-compose.yml 的默认值不一致 —— 不传 DSH_VERSION 时，
 #      docker build 与 docker compose build 会产出不同 dsh 版本的镜像；
 #   2) 默认值随 npm 上的 tag 变动而静默漂移，同一份 Dockerfile 在不同时间构建出不同版本。
 # 故这里钉死一个显式版本；要升级就改这一处，或在 compose/.env 里传 DSH_VERSION 覆盖。
 # 注意：alpha 版本必须写全版本号 —— latest/next 都拿不到它。
-ARG DSH_VERSION=0.1.6-alpha.2
+ARG DSH_VERSION=0.1.7-alpha.1
 ARG PNPM_VERSION=latest
 
 # 预装 dsh + pnpm 到 /opt/dsh-seed（非挂载路径，运行时不被卷遮蔽）。

@@ -27,7 +27,7 @@ the **version of the dsh in the volume**:
 The startup log prints all three versions, so one line answers "did it actually upgrade?":
 
 ```
-[entrypoint] dsh version: seed=0.1.6-alpha.2 volume(before)=0.1.6-alpha.1 effective=0.1.6-alpha.2
+[entrypoint] dsh version: seed=0.1.7-alpha.1 volume(before)=0.1.6-alpha.2 effective=0.1.7-alpha.1
 ```
 
 So an upgrade normally needs only:
@@ -67,14 +67,14 @@ docker restart dsh
 npm dist-tags are **manually assigned** aliases maintained by the publisher — they do **not** advance
 automatically, and the three tags can point at three different versions:
 
-| tag | Points at (checked 2026-09-18) | Meaning |
+| tag | Points at (checked 2026-09-22) | Meaning |
 |---|---|---|
 | `latest` | `0.1.5-rc.2` | Stable recommendation — **lags behind `alpha`** |
-| `next` | `0.1.5-rc.2` | Newer candidate |
-| `alpha` | `0.1.6-alpha.2` | Preview (**the version this image currently pins**) |
+| `next` | `0.1.5-rc.3` | Newer candidate |
+| `alpha` | `0.1.7-alpha.1` | Preview (**the version this image currently pins**) |
 
 > ⚠️ So `npm install -g @deepseek-ai/dsh@latest` does **not** get you the newest version, and never gets
-> you an alpha. Always pass the full version: `@0.1.6-alpha.2`. Verify with `docker exec dsh dsh --version`.
+> you an alpha. Always pass the full version: `@0.1.7-alpha.1`. Verify with `docker exec dsh dsh --version`.
 >
 > 📌 The table above is a **snapshot in time**: dist-tags are assigned by hand and can change at any
 > moment — for "where do they point right now", trust the live output of the command in the tip below.
@@ -85,6 +85,25 @@ automatically, and the three tags can point at three different versions:
 > for example `0.1.2-rc.1 → 0.1.5-rc.1` migrates sessions to V3, after which the **old version can no
 > longer read** them (the files remain, but the new format is not understood by the old version). So when
 > rolling the dsh version back, roll the `dsh/` data directory back with it.
+>
+> ⚠️ **Since 0.1.7-alpha.1 the session log is V4, and the move is one-way**: a V3 session is converted to V4
+> on **read**, and as soon as it is opened and written to, `session-persistence-jsonl` publishes the
+> **current-format successor** (`session.v4.jsonl.zstd`; the original `session.v3...` stays untouched).
+> In other words, any session written after the upgrade **cannot be read by 0.1.6 again** — a rollback must
+> move the version and the data together:
+>
+> ```bash
+> # before upgrading (inside the container)
+> docker exec dsh sh -c "tar czf /data/dsh/backup-sessions-$(date +%F-%H%M).tgz -C /data/dsh sessions storages"
+> # rollback (inside the container): downgrade, restore the same backup, then restart
+> docker exec dsh rescue dsh-reinstall
+> docker exec dsh sh -c "tar xzf /data/dsh/backup-sessions-*.tgz -C /data/dsh"
+> docker restart dsh
+> ```
+>
+> Also from 0.1.7: `settings.yaml` is imported **once** into profile plugin configuration by the Settings
+> service and the file is renamed to `settings.yaml.imported` (see §9 of
+> `issues/2026-09-22-dsh-0.1.7-alpha.1-适配分析.md`).
 >
 > To leave yourself a fallback point, use `docker exec dsh rescue dsh-upgrade <version>`: it records the
 > current version as last-good first.

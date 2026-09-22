@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+## [v0.5.1-dsh-0.1.7-alpha.1] - 2026-09-22
+
+### Changed
+- **镜像锁定的 dsh 升级到 `0.1.7-alpha.1`**（`ARG DSH_VERSION`）。alpha 线的常规推进：seed → 挂载卷 →
+  entrypoint 监督的部署链路**未变**，`ver_gt` 仍正确判定 `0.1.7-alpha.1 > 0.1.6-alpha.2`，容器内升级
+  不会被镜像 seed 顶回；关闭 HMR 的启动叠加层（`hmr-off.yml`）继续有效 —— 两版
+  `dsh-base/cordis.patch.yml` 的 `hmr` 条目逐字节一致。
+- **`docs/03` 的 dist-tag 快照更新为 2026-09-22 实测**：`latest → 0.1.5-rc.2`、`next → 0.1.5-rc.3`、
+  `alpha → 0.1.7-alpha.1`；README 中英徽章与示例 tag 同步。
+
+### Added
+- **Session V4 单向迁移警告**（`docs/03` 中英）：0.1.7 把会话日志升到 **V4**，V3 会话在读取时转换，
+  一旦打开并继续写入即落盘 `session.v4.jsonl.zstd`（原 `session.v3...` 保留不动）—— **回退 dsh 版本时
+  必须连 `sessions/` 与 `storages/` 一起回滚**。文档已给出升级前备份与回退的完整命令。
+- **门禁 `scripts/t/test-dsh-version-pin.sh`**：把"换版本时漏改一处"钉死 —— 断言 `ARG DSH_VERSION`
+  是完整三段式版本（拒绝 `latest` / `next` / 裸 `alpha`），且 README 中英徽章、`docs/03` 中英 dist-tag
+  表的 `alpha` 行、CHANGELOG 最新版本段落**四处与它一致**。
+
+### Notes
+- 0.1.7 的契约变更**集中在插件侧**，本机实测记录见
+  `issues/2026-09-22-dsh-0.1.7-alpha.1-适配分析.md`（含 §九 实测执行记录）：
+  - 客户端服务 `settingsScope` 被上游移除（新实现为 `configForms`）→ `@xgone/dsh-remote`、
+    `dsh-connect-trae` 的 client 插件会一直 `pending`；
+  - 设置页 slot 改名（`settings.plugin.item` → `plugins.item`、`plugins.row.config` → `plugins.bundle.config`）；
+  - Session V4 拒收 `source.kind === "plugin"` 的旧包壳 → 注入消息的插件必须改用生产者自有 kind
+    （如 `plugin:<name>`）；`dsh-free-search` 还需处理 `dsh-settings` 不再导出 `SettingsProvider`。
+  以上均为**插件侧适配**，不在镜像职责内；镜像只负责版本锁定与文档记录。
 ## [v0.4.12-dsh-0.1.6-alpha.2] - 2026-09-20
 
 ### Added
