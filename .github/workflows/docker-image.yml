@@ -29,6 +29,8 @@ on:
     # 注：路径过滤对 tag 推送本就不生效（GitHub 规则），因此 tag 构建完全不受影响。
     paths-ignore:
       - '**.md'
+    # 注意：GitHub 的路径过滤按【变更文件列表】判定 —— 空提交（--allow-empty）没有任何变更文件，
+    # 因此**不会触发**本工作流。想重建一次 main 镜像必须带真实文件改动。
   workflow_dispatch:
 
 # 发布串行化：:latest 是所有 tag 构建共享的输出。若按 github.ref 分组，v0.4.1 与 v0.4.2 的构建

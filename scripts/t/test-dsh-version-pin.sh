@@ -30,6 +30,16 @@ esac
 printf '%s\n' "$ARG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
   || fail "arg-not-semver" "ARG DSH_VERSION='$ARG' is not a full 3-part version"
 
+# P1b：PNPM_VERSION 同理 —— 2026-09-22 之前这里是 latest，会随时间解析到不同版本，
+# 与 DSH_VERSION 的漂移风险一模一样（同一份 Dockerfile 构建出不同的 pnpm）。
+PNPM=$(sed -n 's/^ARG PNPM_VERSION=\(.*\)$/\1/p' "$ROOT/Dockerfile" | head -n1)
+[ -n "$PNPM" ] || fail "pnpm-arg-missing" "no ARG PNPM_VERSION in Dockerfile"
+case "$PNPM" in
+  latest|next|"") fail "pnpm-is-dist-tag" "PNPM_VERSION must be explicit, got '$PNPM'" ;;
+esac
+printf '%s\n' "$PNPM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+  || fail "pnpm-not-semver" "ARG PNPM_VERSION='$PNPM' is not a full 3-part version"
+
 # P2/P3：README 徽章（npm 语义里预发布段用双横线）
 BADGE=$(printf '%s' "$ARG" | sed 's/-/--/')
 for f in README.md README.zh-CN.md; do
