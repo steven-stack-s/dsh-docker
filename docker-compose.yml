@@ -22,7 +22,7 @@ services:
   dsh:
     # 镜像拉取策略：默认 ghcr.io 的 :latest（跟随最近一次 v*-dsh* tag 发布的锁定版本）。
     #   要彻底锁死某个版本，请显式指定 DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<项目版本>-dsh-<dsh版本>
-    #   例如 v0.5.1-dsh-0.1.7-alpha.1（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
+    #   例如 v0.5.2-dsh-0.1.7-alpha.2（v* tag 构建时 seed 的 dsh 版本与 tag 后缀严格一致）。
     image: ${DSH_IMAGE:-ghcr.io/steven-stack-s/dsh-docker:latest}
     # 【为什么这里刻意没有 build:】
     #   真机教训（2026-09-17）：当 `image:` 与 `build:` 共用同一个 tag 时，只要本地没有该镜像，

@@ -27,7 +27,7 @@ the **version of the dsh in the volume**:
 The startup log prints all three versions, so one line answers "did it actually upgrade?":
 
 ```
-[entrypoint] dsh version: seed=0.1.7-alpha.1 volume(before)=0.1.6-alpha.2 effective=0.1.7-alpha.1
+[entrypoint] dsh version: seed=0.1.7-alpha.2 volume(before)=0.1.7-alpha.1 effective=0.1.7-alpha.2
 ```
 
 So an upgrade normally needs only:
@@ -67,14 +67,14 @@ docker restart dsh
 npm dist-tags are **manually assigned** aliases maintained by the publisher — they do **not** advance
 automatically, and the three tags can point at three different versions:
 
-| tag | Points at (checked 2026-09-22) | Meaning |
+| tag | Points at (checked 2026-09-23) | Meaning |
 |---|---|---|
 | `latest` | `0.1.5-rc.2` | Stable recommendation — **lags behind `alpha`** |
 | `next` | `0.1.5-rc.3` | Newer candidate |
-| `alpha` | `0.1.7-alpha.1` | Preview (**the version this image currently pins**) |
+| `alpha` | `0.1.7-alpha.2` | Preview (**the version this image currently pins**) |
 
 > ⚠️ So `npm install -g @deepseek-ai/dsh@latest` does **not** get you the newest version, and never gets
-> you an alpha. Always pass the full version: `@0.1.7-alpha.1`. Verify with `docker exec dsh dsh --version`.
+> you an alpha. Always pass the full version: `@0.1.7-alpha.2`. Verify with `docker exec dsh dsh --version`.
 >
 > 📌 The table above is a **snapshot in time**: dist-tags are assigned by hand and can change at any
 > moment — for "where do they point right now", trust the live output of the command in the tip below.

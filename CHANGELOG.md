@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [v0.5.2-dsh-0.1.7-alpha.2] - 2026-09-23
+
+### Changed
+- **镜像锁定的 dsh 升级到 `0.1.7-alpha.2`**（`ARG DSH_VERSION`）。alpha 线的常规推进：seed → 挂载卷 →
+  entrypoint 监督的部署链路**未变**，`ver_gt` 正确判定 `0.1.7-alpha.2 > 0.1.7-alpha.1`，容器内已升级的卷
+  不会被镜像 seed 顶回。
+- **`docs/03` 的 dist-tag 快照更新为 2026-09-23 实测**：`latest → 0.1.5-rc.2`、`next → 0.1.5-rc.3`、
+  `alpha → 0.1.7-alpha.2`；README 中英徽章与示例 tag 同步。
+
+### Notes
+- 本次升级按**全树 diff** 评估（0.1.7-alpha.1 → 0.1.7-alpha.2）：客户端服务名、设置页 slot 名、
+  图标导出**三者零变化**；`dsh-base/cordis.patch.yml` 仅一处调整
+  （`maxInlineBytes: 50000` → `maxInlineTokens: 12500`），`dsh-web-app/cordis.patch.yml` 完全一致 ——
+  对第三方插件的契约面无影响。
+- 本机升级实测：启动零激活告警、`/health` 200、记忆检索链正常（tier2/tier3 命中并注入）。
+
 ## [v0.5.1-dsh-0.1.7-alpha.1] - 2026-09-22
 
 ### Changed
