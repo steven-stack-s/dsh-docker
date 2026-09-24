@@ -5,7 +5,12 @@
 # 擅自开启 nounset 会让"某个变量忘了默认值"直接终止调用方 —— 而那正是容器启动路径。
 # 需要防御的地方一律用 ${VAR:-default} 显式声明。
 
-: "${DSH_HOME:?DSH_HOME must be set}"
+# 兜底而不是硬失败：交互终端跑的是 DSH 构造的 child env（只注入 DSH_SHELL /
+# DSH_SESSION_ID / DSH_PTY_SESSION_ID，**不含 DSH_HOME**），硬要求会让用户在终端里跑
+# `rescue ...` 直接报 "DSH_HOME must be set"。这里与本文件开头的约定（一律用 ${VAR:-default}）
+# 以及 entrypoint 的 ${DSH_HOME:-/data/dsh} 保持一致。
+: "${DSH_HOME:=/data/dsh}"
+export DSH_HOME
 RESCUE_PROFILE="${RESCUE_PROFILE:-web}"
 RESCUE_DIR="$DSH_HOME/.rescue"
 RESCUE_KEEP="${RESCUE_KEEP:-3}"
