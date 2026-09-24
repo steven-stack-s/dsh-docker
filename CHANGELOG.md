@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+## [v0.5.3-dsh-0.1.7-rc.1] - 2026-09-24
+
+### Changed
+- **镜像锁定的 dsh 升级到 `0.1.7-rc.1`**（`ARG DSH_VERSION`）。首次从 alpha 线切到 **rc 线**：
+  seed → 挂载卷 → entrypoint 监督的部署链路**未变**，`ver_gt` 正确判定 `0.1.7-rc.1 > 0.1.7-alpha.2`。
+- **`docs/03` 的 dist-tag 快照更新为 2026-09-24 实测**：`latest → 0.1.5-rc.3`（原 `0.1.5-rc.2`）、
+  `next → 0.1.7-rc.1`（原 `0.1.5-rc.3`）、`alpha → 0.1.7-alpha.2`；README 中英徽章与示例 tag 同步。
+- **门禁 `test-dsh-version-pin.sh` 的 docs 断言由「必须是 alpha 行」放宽为「表中任意一行等于 ARG」** ——
+  锁定版本现在挂在 `next` 而不是 `alpha` 下，硬编码 tag 名会让门禁在换线时说谎。
+
+### Added
+- **插件 peer 版本校验（0.1.7-rc.1 起）**：安装/启动会强制校验插件声明的 DSH peer 范围，
+  不满足即拒绝（错误码 `incompatible-version`）并打印豁免命令
+  `dsh plugin --profile <p> allow-version <pkg@version> --dsh-version <runtime> --accept-risk`。
+  实测本机 10 个第三方插件在该校验所用的 `includePrerelease: true` 语义下**全部通过**。
+
+### Notes
+- 本次升级经**全树 diff** 评估（`0.1.7-alpha.2 → 0.1.7-rc.1`）：客户端服务名、设置页 slot 名、
+  图标导出**无破坏性变化**（图标仅新增 `IconUsersOutlineRegular`）；`dsh-base` 与 `dsh-web-app` 的
+  `cordis.patch.yml` **各 0 行差异**；6 个契约关键文件（`dsh-session-format-v3-to-v4`、`dsh-config-editor`、
+  `dsh-client-ui-settings-plugins`、`dsh-llm-pi-ai`、`dsh-web`、`dsh-settings`）**字节相同**。
+- 本机升级实测：启动零激活告警、`/health` 200、记忆检索链正常（tier2/tier3 命中并注入）、
+  健康基线推进到 `snap-0147`。
+
 ## [v0.5.2-dsh-0.1.7-alpha.2] - 2026-09-23
 
 ### Changed

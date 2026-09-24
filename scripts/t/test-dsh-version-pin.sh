@@ -47,10 +47,12 @@ for f in README.md README.zh-CN.md; do
     || fail "badge-$f" "$f badge does not carry $ARG"
 done
 
-# P4/P5：docs 03 的 dist-tag 表 alpha 行（用 [|] 与 . 规避反引号的命令替换语义）
+# P4/P5：docs 03 的 dist-tag 表里必须有一行与本镜像锁定的版本一致（用 [|] 与 . 规避反引号的
+# 命令替换语义）。刻意不绑定具体 tag 名 —— 锁定版本可能挂在 alpha / next / latest 任一条线下
+# （2026-09-24 起挂 next），硬编码 tag 名会让门禁在换线时说谎。
 for f in docs/zh-CN/03-升级与维护.md docs/en/03-upgrade-maintenance.md; do
-  grep -Eq "^[|] .alpha. [|] .$ARG. [|]" "$ROOT/$f" \
-    || fail "docs-$f" "$f alpha row does not carry $ARG"
+  grep -Eq "^[|] .[a-z][a-z]*. [|] .$ARG. [|]" "$ROOT/$f" \
+    || fail "docs-$f" "$f dist-tag table has no row carrying $ARG"
 done
 
 # P6：CHANGELOG 段落（形如 ## [v0.4.13-dsh-0.1.7-alpha.1]）

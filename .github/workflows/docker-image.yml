@@ -3,7 +3,7 @@
 #
 # 触发：
 #   - 推送 v* tag -> 镜像 tag 为该 tag + latest
-#     tag 格式：v<项目版本>-dsh-<dsh版本>，如 v0.5.2-dsh-0.1.7-alpha.2
+#     tag 格式：v<项目版本>-dsh-<dsh版本>，如 v0.5.3-dsh-0.1.7-rc.1
 #     解析与校验在 scripts/ci-image-tags.sh（有单测 scripts/t/test-ci-image-tags.sh）
 #   - 推送 main 分支 -> 镜像 tag 为 main，seed 装 npm latest
 #   - 手动 dispatch   -> main 分支打 :main，其他分支打 :branch-<slug>（不污染 :main）
