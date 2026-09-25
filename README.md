@@ -5,7 +5,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8)](https://github.com/steven-stack-s/dsh-docker/releases)
 [![Image Build](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml/badge.svg)](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml)
 [![GHCR](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.1-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.2-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
 [![License](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
 
 > Deploy [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) — DeepSeek's official AI coding agent framework (Web UI + CLI) — on **any Docker environment** with one command.
@@ -121,7 +121,7 @@ Host :3080 ──> container socat(0.0.0.0:3080) ──> dsh web(127.0.0.1:3081)
 
 ## 🏷️ Releases
 
-Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh-<dsh-version>` (e.g. `v0.5.3-dsh-0.1.7-rc.1`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
+Release history in [CHANGELOG.md](CHANGELOG.md). Image tags follow the dual-version scheme `v<project-version>-dsh-<dsh-version>` (e.g. `v0.5.4-dsh-0.1.7-rc.2`); pushing a tag in that format auto-builds multi-arch images to `ghcr.io`.
 
 > To run a **pinned** dsh version, set `DSH_IMAGE=ghcr.io/steven-stack-s/dsh-docker:v<project-version>-dsh-<dsh-version>` in `.env` (its seed matches that exact dsh version). The default `:latest` is rebuilt on every tag push and tracks the newest published version — it is not a fixed build.
 

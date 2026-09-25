@@ -5,7 +5,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/steven-stack-s/dsh-docker?sort=semver&color=5965d8)](https://github.com/steven-stack-s/dsh-docker/releases)
 [![镜像构建](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml/badge.svg)](https://github.com/steven-stack-s/dsh-docker/actions/workflows/docker-image.yml)
 [![GHCR 镜像](https://img.shields.io/badge/ghcr.io-dsh--docker-2496ED?logo=docker&logoColor=white)](https://github.com/steven-stack-s/dsh-docker/pkgs/container/dsh-docker)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.1-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.7--rc.2-4aa3ff)](https://github.com/deepseek-ai/deepseek-harness)
 [![MIT 许可证](https://img.shields.io/github/license/steven-stack-s/dsh-docker?color=3b7a57)](https://github.com/steven-stack-s/dsh-docker/blob/main/LICENSE)
 
 > 在**任意 Docker 环境**（Linux 服务器 / NAS / 云主机 / Docker Desktop）一键部署
@@ -119,7 +119,7 @@ docker compose up -d
 
 ## 🏷️ 版本
 
-发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh-<dsh版本>`（如 `v0.5.3-dsh-0.1.7-rc.1`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
+发布历史见 [CHANGELOG.md](CHANGELOG.md)。镜像 tag 采用双版本 `v<项目版本>-dsh-<dsh版本>`（如 `v0.5.4-dsh-0.1.7-rc.2`）；推送该格式 tag 会自动构建多架构镜像到 `ghcr.io`。
 
 ---
 

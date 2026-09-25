@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [v0.5.4-dsh-0.1.7-rc.2] - 2026-09-25
+
+### Changed
+- **镜像锁定的 dsh 升级到 `0.1.7-rc.2`**（`ARG DSH_VERSION`）。rc 线的常规推进：seed → 挂载卷 →
+  entrypoint 监督的部署链路**未变**，`ver_gt` 正确判定 `0.1.7-rc.2 > 0.1.7-rc.1`。
+- **`docs/03` 的 dist-tag 快照更新为 2026-09-25 实测**：`latest → 0.1.5-rc.3`（不变）、
+  `next → 0.1.7-rc.2`（原 `0.1.7-rc.1`）、`alpha → 0.1.7-alpha.2`（不变）；README 中英徽章与示例 tag 同步。
+- **`scripts/librescue.sh`：`DSH_HOME` 改为兜底而不是硬失败**。交互终端跑的是 DSH 构造的 child env
+  （只注入 `DSH_SHELL` / `DSH_SESSION_ID` / `DSH_PTY_SESSION_ID`），**不含 `DSH_HOME`** —— 原来的硬失败写法
+  会让用户在侧边栏终端里执行 `rescue ...` 直接报 `DSH_HOME must be set`。现改为 `${DSH_HOME:=/data/dsh}`
+  + `export`，与本文件开头的约定（一律用 `${VAR:-default}`）、以及 entrypoint 的兜底写法保持一致。
+
+### Notes
+- 本次升级经**全树 diff** 评估（`0.1.7-rc.1 → 0.1.7-rc.2`）：契约面**零删除** —— 客户端服务仅**新增**
+  `shortcuts`，slot 仅新增 3 个（`sidebar.session.row.leading` / `sidebar.session.row.hover` /
+  `shell.quota-notice`），图标仅新增 4 个，**没有任何删除**；`dsh-base` / `dsh-web-app` 的组合结构正常。
+  rc.2 新增 7 个包（`dsh-client-shortcuts`、`dsh-client-ui-shortcuts`、`dsh-experimental-auto-review`、
+  `dsh-llm-deepseek-account`、`dsh-llm-deepseek-api-key`、`dsh-util-code-language` 及 `dsh` 本体）。
+- ⚠️ **升级后必须让浏览器加载新的前端资源**。rc.2 重建了 `dsh-web-frontend` 的预构建资源，并新增了
+  `shortcuts` 客户端服务。若浏览器仍持有旧前端，会出现**大片客户端 entry pending** —— 表现为
+  `Failed to load plugins` 加数十条 `dsh-client-ui-*: pending (waiting for service: shortcuts)`，
+  **而服务端日志完全正常**（本次实测：evidence 日志里只有 memos 的正常输出，没有任何模块错误）。
+  **这不是升级失败**，处置是**用无痕窗口或强制刷新重新加载**；本次实测无痕窗口打开后即恢复正常。
+- 升级前备份：`/data/dsh/backup-pre017rc2-*`（含 profiles 与 sessions/storages）。
+
 ## [v0.5.3-dsh-0.1.7-rc.1] - 2026-09-24
 
 ### Changed
